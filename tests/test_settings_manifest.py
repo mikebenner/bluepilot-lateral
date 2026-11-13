@@ -26,6 +26,7 @@ PARAMS_KEYS_H = [
   '{"FordLowSpeedFactor_ang", {PERSISTENT | BACKUP, FLOAT, "1.0"}},',
   '{"FordHighSpeedFactor_ang", {PERSISTENT | BACKUP, FLOAT, "1.0"}},',
   '{"FordHighSpeedDampening_ang", {PERSISTENT | BACKUP, FLOAT, "1.0"}},',
+  '{"FordLowSpeedFloor_ang", {PERSISTENT | BACKUP, FLOAT, "0.0"}},',
   '{"lane_change_factor_high_ang", {PERSISTENT | BACKUP, FLOAT, "1.0"}},',
   '{"custom_path_offset_ang", {PERSISTENT | BACKUP, FLOAT, "0.0"}},',
   '{"lane_centering_strength_ang", {PERSISTENT | BACKUP, FLOAT, "0.25"}},',
@@ -51,7 +52,7 @@ class TestSettingsManifest(unittest.TestCase):
   def test_per_frame_keys_are_what_hosts_publish(self):
     # hosts (bp-sunnypilot's controlsd) publish BP_LATERAL_PARAMS in CarControlSP.params
     self.assertEqual(BP_LATERAL_PARAMS, PER_FRAME_KEYS)
-    self.assertEqual((len(SETTINGS), len(PER_FRAME_KEYS)), (19, 18))
+    self.assertEqual((len(SETTINGS), len(PER_FRAME_KEYS)), (20, 19))
 
   def test_one_read_rule(self):
     """A published, parseable value is used; missing, empty or unparsable gives the default."""
@@ -86,7 +87,7 @@ class TestSettingsManifest(unittest.TestCase):
     """The bounds the library clamps to (the angle-mode factors, as BluePilot's own fork does)."""
     self.assertEqual({s.key: s.range for s in SETTINGS if s.clamp}, {
       "FordLowSpeedFactor_ang": (0.5, 1.5), "FordHighSpeedFactor_ang": (0.5, 1.5), "FordHighSpeedDampening_ang": (0.25, 1.25),
-      "lane_change_factor_high_ang": (0.85, 1.5), "custom_path_offset_ang": (-0.5, 0.5), "lane_centering_strength_ang": (0.0, 1.0),
+      "FordLowSpeedFloor_ang": (0.0, 50.0), "lane_change_factor_high_ang": (0.85, 1.5), "custom_path_offset_ang": (-0.5, 0.5), "lane_centering_strength_ang": (0.0, 1.0),
     })
 
   def test_read_kind_is_enforced(self):

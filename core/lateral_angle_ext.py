@@ -30,6 +30,12 @@ resumed. Mode 0 is panda-clean by construction: every ford.h check has a legitim
 !steer_control_enabled branch. On release, path_angle ramps back in from zero through the soft
 ROC below (no jump seed) -- generous at human-turn speeds, and admitted by ford.h's path_angle
 ROC check (2% looser).
+
+**Low speed floor (``FordLowSpeedFloor_ang``, off by default)**: path_angle is ``kappa_cmd * v_ego *
+gain``, which is the right shape only where the PSCM's response to path_angle falls with speed. On a
+2023 Expedition it does that above about 45 mph and is flat below (see ``path_angle_speed``), so the
+command falls short in proportion to speed as the car slows. With the floor set, the speed in that
+product is held up to the floor.
 """
 import numpy as np
 from numpy import clip, interp
@@ -110,6 +116,33 @@ _PRESS_BLIP_MIN_S = 0.5      # press must last this long before its release earn
 _BLIP_MAX_PATH_ANGLE = 0.10  # rad
 
 
+# Low speed floor (FordLowSpeedFloor_ang). Measured on a 2023 Expedition over six drives (delivered
+# curvature from the yaw rate, per radian of path_angle sent, lag-aligned, hands off, 5 mph bands):
+#   20-45 mph: 0.041-0.044 1/m per rad, the same at every speed (corr 0.97-0.99)
+#   45-75 mph: 0.83 / v   (0.038 at 47 mph falling to 0.027 at 72 mph, corr 0.98-0.99)
+# i.e. 1 / response = max(24.4 m, 1.2 s * v), with the knee at 20.3 m/s (45.5 mph). A 2023 Navigator
+# measured 0.037-0.045 across 10-50 mph. kappa_cmd * v_ego follows the second branch at every speed,
+# so below the knee it sends v_ego / 20.3 of what the PSCM needs: half at 23 mph, a quarter at 11 mph.
+# The floor fades out below 9 m/s (20 mph): down there the response came back 0.3-0.8 s late and was
+# only measured with path angles under 0.05 rad, and the deviation clip (v > 9 m/s) no longer bounds
+# the command. At and below 4.5 m/s path_angle is built exactly as without the floor.
+# In replay on a 104 minute drive (30 one-minute segments, the truck modelled as above) a floor of
+# 42 mph took delivered/requested curvature on curves under 1000 m radius from -66% to -15% at
+# 20-30 mph and from -31% to -3% at 30-40 mph, with nothing changed above the floor. Not yet driven.
+_FLOOR_FADE_MS = (4.5, 9.0)
+_MPH_TO_MS = 0.44704
+
+
+def path_angle_speed(v_ego_ms: float, floor_mph: float) -> float:
+  """The speed that turns curvature into path_angle: v_ego, held up to the floor above 9 m/s and
+  fading back to v_ego at 4.5 m/s. floor_mph 0 (the default) returns v_ego."""
+  v = max(float(v_ego_ms), 0.0)
+  floor = float(floor_mph) * _MPH_TO_MS
+  if floor <= v:
+    return v
+  return v + (floor - v) * float(np.interp(v, _FLOOR_FADE_MS, (0.0, 1.0)))
+
+
 def pscm_d_ref_m(v_ego_ms: float) -> float:
   v = max(float(v_ego_ms), 0.0)
   d = float(np.interp(v, _PSCM_DREF_SPEEDS_MS, _PSCM_DREF_M))
@@ -124,6 +157,7 @@ ANGLE_SETTINGS = (
   ("low_speed_curv_factor", "FordLowSpeedFactor_ang"),
   ("high_speed_curv_factor", "FordHighSpeedFactor_ang"),
   ("user_dampening_factor", "FordHighSpeedDampening_ang"),
+  ("low_speed_floor_mph", "FordLowSpeedFloor_ang"),
   ("lane_change_factor_high_ang", "lane_change_factor_high_ang"),
   ("enable_lane_positioning_ang", "enable_lane_positioning_ang"),  # the lane centering trim (lane_center_trim.py)
   ("custom_path_offset_ang", "custom_path_offset_ang"),
@@ -463,7 +497,7 @@ class LateralAngleExt:
     # As the curve gets bigger, we will need a little boost to the signal to to not understeer
     self.curvature_factor = interp(abs(kappa_cmd), [0.0007, 0.001], [self.low_gain_calc, self.high_gain_calc])
 
-    path_angle_calc = kappa_cmd * v_ego * self.curvature_factor
+    path_angle_calc = kappa_cmd * path_angle_speed(v_ego, self.low_speed_floor_mph) * self.curvature_factor
     path_angle = path_angle_calc
 
     # PSCM authority limit clamp.

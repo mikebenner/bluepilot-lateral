@@ -65,6 +65,11 @@ SETTINGS: tuple[Setting, ...] = (
   Setting("FordHighSpeedDampening_ang", float, 1.0, PER_FRAME, "High Speed Low Curve Adjustment Factor",
           "Tune adjustment factor for low curve straightaways (highways) at high speeds. If oversteering, reduce. " +
           "If understeering, increase", range=(0.25, 1.25), clamp=True),
+  Setting("FordLowSpeedDampening_ang", float, 1.0, PER_FRAME, "Low Speed Low Curve Adjustment Factor",
+          "Scales the steering command on gentle curves (radius over about 1400 m) at low speed in angle mode; it " +
+          "blends into the high speed low curve factor by 60 mph. If the car runs wide on gentle curves below " +
+          "45 mph, increase. If it wanders on straight roads at those speeds, reduce. Default 1.0.",
+          range=(0.5, 1.5), clamp=True),
   Setting("FordLowSpeedFloor_ang", float, 0.0, PER_FRAME, "Low Speed Floor (mph)",
           "Below this speed, angle mode builds the steering command as if the car were at this speed, so the " +
           "command stops shrinking as the car slows. For steering that responds the same to a path angle at " +

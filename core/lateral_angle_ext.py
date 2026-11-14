@@ -36,6 +36,18 @@ gain``, which is the right shape only where the PSCM's response to path_angle fa
 2023 Expedition it does that above about 45 mph and is flat below (see ``path_angle_speed``), so the
 command falls short in proportion to speed as the car slows. With the floor set, the speed in that
 product is held up to the floor.
+
+**Low speed, low curvature gain (``FordLowSpeedDampening_ang``, 1.0 by default)**: the gain in that
+product depends on the curve: ``low_gain_calc`` below |kappa| 0.0007 (radius over 1430 m), blending
+to ``high_gain_calc`` by 0.001 (1000 m). At low speed the first was fixed at 1.0 and the second is
+``1.30 * FordLowSpeedFactor_ang``, so a gentle curve was commanded at 77% of a tighter one at the same
+speed. On the 2023 Expedition the PSCM's response per radian of path_angle is the same at every
+radius (measured against the car's yaw sensor, the device gyro and camera odometry: 1.03-1.13 of the
+fitted response on gentle curves), so with the floor at 42 mph it delivered, on curves of 1000-5000 m
+held for over 5 s, 38% less than requested at 20-30 mph, 19% less at 30-40 and 9% less at 40-50, and
+within 6% above 50 mph where the two gains meet. This setting is the low-speed end of
+``low_gain_calc``; raising it stops at the low-speed ``high_gain_calc``, where the low-speed gain is the
+same at every radius.
 """
 import numpy as np
 from numpy import clip, interp
@@ -157,6 +169,7 @@ ANGLE_SETTINGS = (
   ("low_speed_curv_factor", "FordLowSpeedFactor_ang"),
   ("high_speed_curv_factor", "FordHighSpeedFactor_ang"),
   ("user_dampening_factor", "FordHighSpeedDampening_ang"),
+  ("low_speed_dampening_factor", "FordLowSpeedDampening_ang"),
   ("low_speed_floor_mph", "FordLowSpeedFloor_ang"),
   ("lane_change_factor_high_ang", "lane_change_factor_high_ang"),
   ("enable_lane_positioning_ang", "enable_lane_positioning_ang"),  # the lane centering trim (lane_center_trim.py)
@@ -488,11 +501,19 @@ class LateralAngleExt:
 
     lateral_uncertainty = 0.0  # no curvature-limit ladder until angle-mode torque display is defined
 
-    # Speed-interpolated gain: at low speed both curves use 1.0; at high speed the params take effect.
+    # Speed-interpolated gains. At high speed the platform values and the high speed settings apply. At low
+    # speed the high-curvature gain is 1.30 * FordLowSpeedFactor_ang and the low-curvature gain is
+    # FordLowSpeedDampening_ang (default 1.0, the value this code held fixed). Raising it stops at the
+    # high-curvature gain: past 1.3x of that the command would fall as the curvature rises across the
+    # blend. Values up to 1.0 are used as given, so nothing changes for anyone at the default.
+    low_speed_high_gain = 1.30 * self.low_speed_curv_factor
+    low_speed_low_gain = self.low_speed_dampening_factor
+    if low_speed_low_gain > 1.0:
+      low_speed_low_gain = min(low_speed_low_gain, max(1.0, low_speed_high_gain))
     self.low_gain_calc = interp(
-      v_ego, [13.5, 26.82], [1.0, (self.path_angle_gain_lowC_highV * self.user_dampening_factor)]
+      v_ego, [13.5, 26.82], [low_speed_low_gain, (self.path_angle_gain_lowC_highV * self.user_dampening_factor)]
     )
-    self.high_gain_calc = interp(v_ego, [13.5, 26.82], [(1.30 * self.low_speed_curv_factor), (self.path_angle_gain_highC_highV * self.high_speed_curv_factor)])
+    self.high_gain_calc = interp(v_ego, [13.5, 26.82], [low_speed_high_gain, (self.path_angle_gain_highC_highV * self.high_speed_curv_factor)])
 
     # As the curve gets bigger, we will need a little boost to the signal to to not understeer
     self.curvature_factor = interp(abs(kappa_cmd), [0.0007, 0.001], [self.low_gain_calc, self.high_gain_calc])

@@ -81,6 +81,11 @@ SETTINGS: tuple[Setting, ...] = (
   Setting("lane_centering_strength_ang", float, 0.25, PER_FRAME, "Lane Centering Strength",
           "How much authority the lane centering trim has vs. the model's own path (0.0-1.0).",
           range=(0.0, 1.0), clamp=True),
+  Setting("FordPlanBlendHighSpeed_ang", float, 0.5, PER_FRAME, "High Speed Plan Blend",
+          "Angle mode steers on a mix of the driving model's steering request and its predicted path; this is the " +
+          "predicted path's share from 55 mph (it stays 0.5 up to 40 mph). Lower follows the model's request more " +
+          "closely and sooner. If the car weaves slowly side to side on the highway, reduce. If the wheel gets " +
+          "busy, raise. Default 0.5 (unchanged).", range=(0.0, 0.5), clamp=True),
   Setting("FordPrefSteerAngleCurvature", bool, False, STARTUP, "Use Pinion Yaw Sensor",
           "Measures how the car is turning from the steering pinion angle sensor instead of a faulty RCM yaw sensor " +
           '(symptoms: "Turn Exceeds Steering Limit" warnings, weak curve tracking, "Service AdvanceTrac"). Check with ' +

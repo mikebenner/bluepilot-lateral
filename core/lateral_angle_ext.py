@@ -75,6 +75,13 @@ _PSCM_DREF_M = (0.5, 0.95, 1.4, 2.075, 2.75, 3.875)
 
 # Default blend ratio validated on F-150 fleet data (0.5s lookup time).
 _FORD_PATH_ANGLE_BLEND_RATIO_DEFAULT = 0.50
+# FordPlanBlendHighSpeed_ang replaces that ratio at speed: the fixed ratio up to 40 mph, the setting from
+# 55 mph. At its default (0.5, the fixed ratio) every command is what it was. The plan curvature is read
+# 0.2 s along the plan while the model's request is already made for the car's learned steering delay
+# (about 0.25 s + a frame), so on a 2023 Expedition at 60-80 mph the blended half ran 0.22-0.31 s behind
+# the request (and was ~60% the truck's own current curvature), and the truck followed the request by
+# 0.40-0.59 s instead of its own 0.25-0.32 s.
+_PLAN_BLEND_SPEED_BP = (40.0 * 0.44704, 55.0 * 0.44704)
 
 # Variable lookup time (VLT): curvature_lookup_time adapts to speed and curvature magnitude.
 # t_lookup = t_base + t_extra_max × speed_factor(v) × kappa_factor(|κ|)
@@ -175,6 +182,7 @@ ANGLE_SETTINGS = (
   ("enable_lane_positioning_ang", "enable_lane_positioning_ang"),  # the lane centering trim (lane_center_trim.py)
   ("custom_path_offset_ang", "custom_path_offset_ang"),
   ("lane_centering_strength_ang", "lane_centering_strength_ang"),
+  ("high_speed_plan_blend", "FordPlanBlendHighSpeed_ang"),
 )
 
 
@@ -419,7 +427,7 @@ class LateralAngleExt:
         interp(curvature_lookup_time, MODEL_T_IDXS, curvatures)
       )
 
-    b = float(self.path_angle_blend_ratio)
+    b = float(interp(v_ego, _PLAN_BLEND_SPEED_BP, [float(self.path_angle_blend_ratio), float(self.high_speed_plan_blend)]))
     b = float(clip(b, 0.0, 1.0))
 
     # Exit-biased blend: near the PSCM authority limit or while the planner is actively

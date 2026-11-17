@@ -86,6 +86,16 @@ SETTINGS: tuple[Setting, ...] = (
           "predicted path's share from 55 mph (it stays 0.5 up to 40 mph). Lower follows the model's request more " +
           "closely and sooner. If the car weaves slowly side to side on the highway, reduce. If the wheel gets " +
           "busy, raise. Default 0.5 (unchanged).", range=(0.0, 0.5), clamp=True),
+  Setting("FordPlanBlendLowSpeed_ang", float, 0.5, PER_FRAME, "Low Speed Plan Blend",
+          "The predicted path's share of the steering command up to 40 mph (see High Speed Plan Blend; between 40 " +
+          "and 55 mph the two are mixed). Lower follows the model's request more closely and sooner. If the car " +
+          "turns in late on tight curves or keeps turning after them, reduce. If the wheel gets busy in town, " +
+          "raise. Default 0.5 (unchanged).", range=(0.0, 0.5), clamp=True),
+  Setting("FordLaneTrimFadeRadius_ang", float, 0.0, PER_FRAME, "Lane Centering Fade Radius (m)",
+          "The lane centering trim has no effect on curves tighter than this radius and its full effect on curves " +
+          "gentler than twice this radius, so it stops pushing against the model's line through tight turns. " +
+          "400 keeps it on highway curves and fades it out in town turns. 0 turns the fade off (unchanged).",
+          range=(0.0, 1000.0), clamp=True),
   Setting("FordPrefSteerAngleCurvature", bool, False, STARTUP, "Use Pinion Yaw Sensor",
           "Measures how the car is turning from the steering pinion angle sensor instead of a faulty RCM yaw sensor " +
           '(symptoms: "Turn Exceeds Steering Limit" warnings, weak curve tracking, "Service AdvanceTrac"). Check with ' +

@@ -67,9 +67,8 @@ class TestHighSpeedPlanBlend(unittest.TestCase):
       self.assertGreater(k, last)
       last = k
 
-  def test_low_speed_ratio_still_comes_from_the_fixed_one(self):
-    a = _angle(high_speed_plan_blend=0.0)
-    a.path_angle_blend_ratio = 0.3
+  def test_low_speed_ratio_comes_from_the_low_speed_setting(self):
+    a = _angle(high_speed_plan_blend=0.0, low_speed_plan_blend=0.3)
     self.assertAlmostEqual(_run(a, 20 * MPH)[-1][0], REQUEST * 0.7, places=12)
     self.assertAlmostEqual(_run(a, 70 * MPH)[-1][0], REQUEST, places=12)
 

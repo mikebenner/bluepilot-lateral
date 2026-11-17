@@ -88,7 +88,7 @@ class LaneCenterTrim:
     self._correction = 0.0
 
   def update(self, kappa_cmd: float, model, v_ego: float, enabled: bool, offset: float,
-             gain: float, lat_active: bool, lane_change: bool) -> float:
+             gain: float, lat_active: bool, lane_change: bool, fade: float = 1.0) -> float:
     """Returns ``kappa_cmd``, nudged toward (lane-blend target + ``offset``) when active.
 
     ``offset`` (m): positive shifts the target right, negative left (same sign convention as
@@ -96,6 +96,8 @@ class LaneCenterTrim:
     -- see module docstring.
     ``gain`` (0.0-1.0): user-tunable authority -- how much of the (already magnitude-clipped)
     raw correction is actually applied. 0 disables the trim's effect without disabling detection.
+    ``fade`` (0.0-1.0): scales the target the same way; lateral_angle_ext.py lowers it on tight
+    curves (FordLaneTrimFadeRadius_ang). At 1.0, the default, nothing changes.
 
     The applied correction is both exponentially smoothed (_SMOOTH_TAU_S) and rate-limited
     (_CORRECTION_ROC_PER_TICK) -- see the constants above -- so a lane-line-confidence
@@ -123,6 +125,8 @@ class LaneCenterTrim:
       return kappa_cmd
 
     target = float(np.clip(raw, -_MAX_RAW_CORRECTION, _MAX_RAW_CORRECTION)) * float(np.clip(gain, 0.0, 1.0)) * speed_factor
+    if fade != 1.0:
+      target *= float(np.clip(fade, 0.0, 1.0)) if np.isfinite(fade) else 0.0
     alpha = 1.0 - np.exp(-0.05 / _SMOOTH_TAU_S)  # BluePilot lateral tick is 20 Hz (dt=0.05s)
     filtered = float(alpha * target + (1.0 - alpha) * self._correction)
     # Rate-of-change limit -- see _CORRECTION_ROC_PER_TICK. Bounds the correction's own per-tick

@@ -27,11 +27,11 @@ def _angle(factor=None, **settings):
 
 def _settle(angle, v, kappa, frames=200):
   """path_angle after holding one speed and one commanded curvature, with the car turning exactly as commanded.
-  These tests give the strategy no model plan, so its blend with the plan (path_angle_blend_ratio) scales the
+  These tests give the strategy no model plan, so its blend with the plan (low_speed_plan_blend at these speeds) scales the
   request down: the request is set to what leaves kappa as the curvature the gain acts on."""
   CS = SimpleNamespace(out=SimpleNamespace(vEgoRaw=v, steeringPressed=False, steeringAngleDeg=0.0, yawRate=-kappa * v))
   CC = SimpleNamespace(latActive=True)
-  request = kappa / (1.0 - angle.path_angle_blend_ratio)
+  request = kappa / (1.0 - angle.low_speed_plan_blend)
   out = []
   for _ in range(frames):
     out.append(angle.update_angle_strategy(CC, CS, SimpleNamespace(curvature=request)).path_angle)

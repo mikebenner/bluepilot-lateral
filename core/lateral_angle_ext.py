@@ -3,8 +3,8 @@ BluePilot: Ford CAN-FD path-angle–primary lateral control (developer).
 
 Steering intent is c1 from κ → θ. Converts planner/model curvature into ``path_angle`` using
 PSCM short lookahead d_ref and y ≈ ½κ x² ⇒ path_angle = ½ κ d_ref. Predicted curvature
-(modelV2) is blended with ``actuators.curvature`` by ``path_angle_blend_ratio`` (0 = planner only,
-1 = model only).
+(modelV2) is blended with ``actuators.curvature`` by the plan blend settings (0 = planner only,
+1 = model only; ``FordPlanBlendLowSpeed_ang`` / ``FordPlanBlendHighSpeed_ang``).
 
 **c0 (path_offset) is always zero on the wire, unconditionally.** An earlier port attempt piped
 a small additive trim onto path_angle through the curv-mode ``LC_PID_controller``, but it never
@@ -75,13 +75,24 @@ _PSCM_DREF_M = (0.5, 0.95, 1.4, 2.075, 2.75, 3.875)
 
 # Default blend ratio validated on F-150 fleet data (0.5s lookup time).
 _FORD_PATH_ANGLE_BLEND_RATIO_DEFAULT = 0.50
-# FordPlanBlendHighSpeed_ang replaces that ratio at speed: the fixed ratio up to 40 mph, the setting from
-# 55 mph. At its default (0.5, the fixed ratio) every command is what it was. The plan curvature is read
+# Two settings hold that ratio: FordPlanBlendLowSpeed_ang up to 40 mph and FordPlanBlendHighSpeed_ang from
+# 55 mph, both 0.5 by default, so at the defaults every command is what it was. The plan curvature is read
 # 0.2 s along the plan while the model's request is already made for the car's learned steering delay
 # (about 0.25 s + a frame), so on a 2023 Expedition at 60-80 mph the blended half ran 0.22-0.31 s behind
 # the request (and was ~60% the truck's own current curvature), and the truck followed the request by
 # 0.40-0.59 s instead of its own 0.25-0.32 s.
+# Below 40 mph the same lag shows on tight curves (100-260 m, 25-45 mph, six drives): while the request rose
+# the command carried 0.87 of it (0.92 without the blend), and while it fell 1.13 (1.07 without).
 _PLAN_BLEND_SPEED_BP = (40.0 * 0.44704, 55.0 * 0.44704)
+
+# FordLaneTrimFadeRadius_ang (off at 0): the lane centering trim keeps its full authority on curves gentler
+# than twice this radius and has none on curves tighter than it. On a tight curve the model's path runs
+# inside the lane center, so the trim pushes against the turn on the way in and into it on the way out
+# (2023 Expedition, same curves as above: 5 points of the request lost on entry). The curvature it looks at
+# is the larger of the request now and the model plan over the next second, so the trim is already fading
+# when the curve starts.
+_TRIM_FADE_PLAN_S = 1.0
+_TRIM_FADE_MIN_RADIUS_M = 50.0
 
 # Variable lookup time (VLT): curvature_lookup_time adapts to speed and curvature magnitude.
 # t_lookup = t_base + t_extra_max × speed_factor(v) × kappa_factor(|κ|)
@@ -183,6 +194,8 @@ ANGLE_SETTINGS = (
   ("custom_path_offset_ang", "custom_path_offset_ang"),
   ("lane_centering_strength_ang", "lane_centering_strength_ang"),
   ("high_speed_plan_blend", "FordPlanBlendHighSpeed_ang"),
+  ("low_speed_plan_blend", "FordPlanBlendLowSpeed_ang"),
+  ("lane_trim_fade_radius", "FordLaneTrimFadeRadius_ang"),
 )
 
 
@@ -195,8 +208,8 @@ class LateralAngleExt:
     # BluePilotLateral's LateralInputs (read) and SharedLateralState (read and written), common to both strategies
     self.inputs = inputs
     self.shared = shared
-    # Predicted-curvature blend for path_angle: pred * b + desired * (1-b); b is this fixed default
-    self.path_angle_blend_ratio = _FORD_PATH_ANGLE_BLEND_RATIO_DEFAULT
+    # Predicted-curvature blend for path_angle: pred * b + desired * (1-b); b comes from the two plan blend
+    # settings (low_speed_plan_blend, high_speed_plan_blend), _FORD_PATH_ANGLE_BLEND_RATIO_DEFAULT by default
     # Max extra VLT above t_base (fixed)
     self.vlt_extra_max = _VLT_T_EXTRA_MAX
     # Telemetry: final path_angle (rad) after limits (for the BluePilot UI's bp_card_publisher)
@@ -217,6 +230,8 @@ class LateralAngleExt:
     # BluePilot: error-clipped kappa path_angle was derived from -- carcontroller_ext.py reads this as
     # shadow_curvature for ford.h's angle-mode deviation check. Actively consumed, not telemetry.
     self.bp_kappa_cmd = 0.0
+    # Telemetry: the lane trim's authority this frame (1 = full, 0 = faded out on a tight curve)
+    self.bp_lane_trim_fade = 1.0
     # BluePilot: rate-limit diagnostics (the BluePilot UI's controllerStateBP)
     self.bp_angle_rate_limited = False      # path_angle soft-ROC clip actually bit this frame
     self.bp_curvature_rate_limited = False  # equivalent curvature would be rate-limited by curv-mode logic (sim)
@@ -421,13 +436,22 @@ class LateralAngleExt:
     self.bp_curvature_lookup_time = curvature_lookup_time
 
     predicted_curvature = 0.0
+    curvature_ahead = abs(desired_curvature)  # for the lane trim fade: the request now, or the plan's next second
     if self.inputs.model is not None and len(self.inputs.model.orientationRate.z) >= 17:
       curvatures = np.array(self.inputs.model.orientationRate.z) / max(0.01, v_ego)
       predicted_curvature = float(
         interp(curvature_lookup_time, MODEL_T_IDXS, curvatures)
       )
+      _soon = np.abs(curvatures[:17][np.array(MODEL_T_IDXS[:17]) <= _TRIM_FADE_PLAN_S])
+      if _soon.size and np.isfinite(_soon).all():
+        curvature_ahead = max(curvature_ahead, float(_soon.max()))
+    trim_fade = 1.0
+    if self.lane_trim_fade_radius > 0.0:
+      _k_none = 1.0 / max(float(self.lane_trim_fade_radius), _TRIM_FADE_MIN_RADIUS_M)
+      trim_fade = float(interp(curvature_ahead, [0.5 * _k_none, _k_none], [1.0, 0.0]))
+    self.bp_lane_trim_fade = trim_fade
 
-    b = float(interp(v_ego, _PLAN_BLEND_SPEED_BP, [float(self.path_angle_blend_ratio), float(self.high_speed_plan_blend)]))
+    b = float(interp(v_ego, _PLAN_BLEND_SPEED_BP, [float(self.low_speed_plan_blend), float(self.high_speed_plan_blend)]))
     b = float(clip(b, 0.0, 1.0))
 
     # Exit-biased blend: near the PSCM authority limit or while the planner is actively
@@ -486,7 +510,7 @@ class LateralAngleExt:
     kappa_cmd = self.lane_center_trim.update(
       kappa_cmd, self.inputs.model, v_ego, self.enable_lane_positioning_ang,
       self.custom_path_offset_ang, self.lane_centering_strength_ang,
-      CC.latActive, self.lane_change)
+      CC.latActive, self.lane_change, trim_fade)
 
     # BluePilot: clip kappa_cmd to current_curvature (measured, from yaw rate) +- CURVATURE_ERROR,
     # mirroring lateral_curv_ext.py's apply_ford_curvature_limits_ext exactly (same formula, same

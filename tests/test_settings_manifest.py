@@ -32,6 +32,8 @@ PARAMS_KEYS_H = [
   '{"custom_path_offset_ang", {PERSISTENT | BACKUP, FLOAT, "0.0"}},',
   '{"lane_centering_strength_ang", {PERSISTENT | BACKUP, FLOAT, "0.25"}},',
   '{"FordPlanBlendHighSpeed_ang", {PERSISTENT | BACKUP, FLOAT, "0.5"}},',
+  '{"FordPlanBlendLowSpeed_ang", {PERSISTENT | BACKUP, FLOAT, "0.5"}},',
+  '{"FordLaneTrimFadeRadius_ang", {PERSISTENT | BACKUP, FLOAT, "0.0"}},',
   '{"FordPrefSteerAngleCurvature", {PERSISTENT | BACKUP, BOOL, "0"}},',
 ]
 
@@ -54,7 +56,7 @@ class TestSettingsManifest(unittest.TestCase):
   def test_per_frame_keys_are_what_hosts_publish(self):
     # hosts (bp-sunnypilot's controlsd) publish BP_LATERAL_PARAMS in CarControlSP.params
     self.assertEqual(BP_LATERAL_PARAMS, PER_FRAME_KEYS)
-    self.assertEqual((len(SETTINGS), len(PER_FRAME_KEYS)), (22, 21))
+    self.assertEqual((len(SETTINGS), len(PER_FRAME_KEYS)), (24, 23))
 
   def test_one_read_rule(self):
     """A published, parseable value is used; missing, empty or unparsable gives the default."""
@@ -92,6 +94,8 @@ class TestSettingsManifest(unittest.TestCase):
       "FordLowSpeedDampening_ang": (0.5, 1.5),
       "FordLowSpeedFloor_ang": (0.0, 50.0), "lane_change_factor_high_ang": (0.85, 1.5), "custom_path_offset_ang": (-0.5, 0.5), "lane_centering_strength_ang": (0.0, 1.0),
       "FordPlanBlendHighSpeed_ang": (0.0, 0.5),
+      "FordPlanBlendLowSpeed_ang": (0.0, 0.5),
+      "FordLaneTrimFadeRadius_ang": (0.0, 1000.0),
     })
 
   def test_read_kind_is_enforced(self):

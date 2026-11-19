@@ -6,7 +6,7 @@ from ...car.ford import fordcan
 from ...car.ford.interface import CarInterface
 from ...car.ford.values import CAR
 from ..core.carcontroller_ext import BluePilotLateral
-from ..core.values_ext import ANGLE_GAIN_CANFD_BOF, FordSafetyFlagsSP
+from ..core.values_ext import ANGLE_GAIN_EXPEDITION, FordSafetyFlagsSP
 from ..params.manifest import value
 from ..params.param_store import ParamStore
 
@@ -78,7 +78,7 @@ class TestLowSpeedLowCurveGain(unittest.TestCase):
   def test_blends_into_the_high_speed_low_curve_gain(self):
     # halfway between 13.5 and 26.82 m/s the gain is halfway between the setting and the high speed value
     v = (13.5 + 26.82) / 2
-    high = ANGLE_GAIN_CANFD_BOF[0] * 1.25
+    high = ANGLE_GAIN_EXPEDITION[0] * 1.25
     got = _settle(_angle(1.3, user_dampening_factor=1.25), v, GENTLE)[-1]  # 1.3 is the cap at the default low speed factor
     self.assertAlmostEqual(got / (GENTLE * v), (1.3 + high) / 2, places=6)
 

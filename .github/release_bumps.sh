@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # A library release, through to a bp-sunnypilot PR (spec: ford-op/bg-opendbc#97). Bumps the library in
 # ford-op/opendbc and merges that PR once its required checks pass (nothing else auto-merges there), then
-# opens the bp-sunnypilot PR that moves opendbc_repo to the new bp-opendbc, saying whether it changes the
-# panda firmware or the lateral Python (a drive before merge if so). Not merged automatically.
+# opens the bp-sunnypilot PR that moves opendbc_repo to the new bp-opendbc, listing the panda firmware and
+# lateral Python it changes. A pin bump never asks for a drive: that happens before the change merges into the
+# library. That PR is merged on green too when its review comment finds no F-150 change; otherwise it waits.
 # usage: GH_TOKEN=<bluepilot-sync App token for opendbc and bp-sunnypilot> release_bumps.sh <tag> <commit>
 set -euo pipefail
 TAG=$1 SHA=$2
@@ -30,21 +31,24 @@ open_pr() {  # <repo> <base> <branch> <title> <body>: the branch's open PR, or a
   if [ -n "$url" ]; then gh pr edit "$url" --title "$4" --body "$5" >/dev/null; echo "$url"
   else gh pr create -R "$OWNER/$1" -B "$2" -H "$3" --title "$4" --body "$5"; fi
 }
-# bp-opendbc's required checks (its branch protection; the App can't read protection, so they're listed)
-REQUIRED=("./test.sh (Linux)" "safety" "bluepilot-safety" "bluepilot-hooks")
-wait_required() {  # <pr>: until every required check has reported and passed; fails on the first failure
-  local out n state
+# Each branch's required checks (its branch protection; the App can't read protection, so they're listed)
+BG_REQUIRED=("./test.sh (Linux)" "safety" "bluepilot-safety" "bluepilot-hooks")                                  # bp-opendbc
+# bp-sunnypilot; not "build macOS": GitHub's macOS runners often never pick the job up, and it isn't required there
+SP_REQUIRED=("build release" "static analysis" "unit tests" "process replay" "install smoke")
+wait_required() {  # <pr> <check>...: until every listed check has reported and passed; fails on the first failure
+  local pr=$1 out n state
+  shift
   for _ in $(seq 150); do
-    out=$(gh pr checks "$1" --required --json name,bucket 2>/dev/null || true)
+    out=$(gh pr checks "$pr" --required --json name,bucket 2>/dev/null || true)
     if jq -e 'any(.[]; .bucket == "fail" or .bucket == "cancel")' <<<"${out:-[]}" >/dev/null; then
       jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | "failed: \(.name)"' <<<"$out"; return 1
     fi
     n=0
-    for name in "${REQUIRED[@]}"; do
+    for name in "$@"; do
       state=$(jq -r --arg n "$name" '.[] | select(.name == $n) | .bucket' <<<"${out:-[]}")
       [ "$state" = pass ] && n=$((n + 1))
     done
-    [ "$n" = "${#REQUIRED[@]}" ] && return 0
+    [ "$n" = "$#" ] && return 0
     sleep 20
   done
   echo "required checks didn't finish in 50 minutes"; return 1
@@ -71,7 +75,7 @@ else
 - [ ] CI \`bluepilot-safety\`
 - [ ] CI \`bluepilot-hooks\`")
   echo "ford-op/opendbc: $PR"
-  wait_required "$PR"
+  wait_required "$PR" "${BG_REQUIRED[@]}"
   gh pr view "$PR" --json body -q .body | sed 's/^- \[ \] CI/- [x] CI/' > "$WORK/body.md"
   gh pr edit "$PR" --body-file "$WORK/body.md"
   # its own message: with GitHub's default, a squash merge by the App adds the App as a co-author
@@ -95,22 +99,69 @@ FW=$(grep -E '\.(h|c)$' <<<"$NOTESTS" || true)
 LAT=$(grep -E '^opendbc/(bluepilot_lateral|car/ford|sunnypilot/car/ford)/.*\.py$|^opendbc/car/(lateral|interfaces|structs)\.py$|^opendbc/sunnypilot/car/interfaces\.py$|^opendbc/dbc/ford' <<<"$NOTESTS" || true)
 # shellcheck disable=SC2016  # the backticks are Markdown, not expansions
 list() { if [ -n "$1" ]; then sed 's/^/  - `/; s/$/`/' <<<"$1"; else echo "  - none"; fi; }
-DRIVE=""
-[ -n "$FW$LAT" ] && DRIVE="
-- [ ] A drive (panda firmware or lateral Python changed)"
+# No drive is asked for here: a change that needs one is driven before it merges into the library (or
+# into ford-op/opendbc), not when a pin moves to it. The lists say what the bump carries.
 BRANCH="opendbc/library-$TAG"
 bump "$WORK/sp" opendbc_repo "$BG" "$BRANCH" "opendbc_repo: bp-opendbc ${BG:0:8} (bluepilot-lateral $TAG)"
-open_pr bp-sunnypilot bp-sunnypilot "$BRANCH" "opendbc_repo: bluepilot-lateral $TAG" \
-"\`opendbc_repo\` moves to ford-op/opendbc \`bp-opendbc\` ${BG:0:8}, which has bluepilot-lateral [$TAG](https://github.com/BluePilotDev/bluepilot-lateral/releases/tag/$TAG). Opened by the library's release job (ford-op/bg-opendbc#97); not merged automatically.
+PR=$(open_pr bp-sunnypilot bp-sunnypilot "$BRANCH" "opendbc_repo: bluepilot-lateral $TAG" \
+"\`opendbc_repo\` moves to ford-op/opendbc \`bp-opendbc\` ${BG:0:8}, which has bluepilot-lateral [$TAG](https://github.com/BluePilotDev/bluepilot-lateral/releases/tag/$TAG). Opened by the library's release job (ford-op/bg-opendbc#97), which merges it once the required checks pass if its review comment finds no F-150 change; otherwise it waits for a maintainer.
 
 - Panda firmware (\`.h\`/\`.c\`) changed:
 $(list "$FW")
 - Lateral Python or Ford DBC changed (outside tests):
 $(list "$LAT")
 
+A pin bump takes no drive of its own: a change that needs one was driven before it merged into the library or ford-op/opendbc. This rides CI.
+
 ## Validation
 - [ ] CI \`build release\`
-- [ ] CI \`build macOS\`
 - [ ] CI \`static analysis\`
 - [ ] CI \`unit tests\`
-- [ ] CI \`process replay\`: the Ford segment matches bp-sunnypilot's own reference, or the difference is explained$DRIVE"
+- [ ] CI \`process replay\`: the Ford segment matches bp-sunnypilot's own reference, or the difference is explained
+- [ ] CI \`install smoke\`")
+SP_HEAD=$(git -C "$WORK/sp" rev-parse HEAD)
+
+# BluePilot: a plain-English review of the bump's F-150 impact, posted on the bump
+# PR. Fail-soft: it never blocks the release. Prompt: .github/bump-review-prompt.md.
+rm -f bump-review.md
+TRUNCATED=""  # a diff cut at 200 lines: the review didn't see all of it
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -n "${PR:-}" ]; then
+  review_bump() {
+    npm install -g --silent @anthropic-ai/claude-code || return 0
+    {
+      cat "$(dirname "$0")/bump-review-prompt.md"
+      printf '\n## Diffs (non-test files changed by this bump)\n'
+      while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        printf '\n### %s\n```diff\n' "$f"
+        case "$f" in
+          opendbc/bluepilot_lateral/*) git -C "$LIB" diff "$OLDLIB" "$SHA" -- "${f#opendbc/bluepilot_lateral/}" > bump-file.diff ;;
+          *) git -C "$WORK/bg" diff "$OLD" "$BG" -- "$f" > bump-file.diff ;;
+        esac
+        [ "$(wc -l < bump-file.diff)" -gt 200 ] && TRUNCATED="$TRUNCATED $f"
+        head -200 bump-file.diff
+        printf '```\n'
+      done <<<"$NOTESTS"
+    } > bump-prompt.md
+    claude -p "$(cat bump-prompt.md)" --max-turns 6 < /dev/null > bump-review.md || return 0
+    [ -s bump-review.md ] || return 0
+    { echo "<!-- bump-review $TAG -->"; cat bump-review.md; } > bump-comment.md
+    # a review nobody can read doesn't count: without the comment the PR waits for a maintainer
+    gh pr comment "$PR" --body-file bump-comment.md || { rm -f bump-review.md; return 0; }
+  }
+  review_bump || true
+fi
+
+# 3. Merged on green when the review found no F-150 change: its verdict line starts with the green mark, it
+# saw every diff in full, and bp-sunnypilot's required checks pass. Anything else waits for a maintainer.
+if [ -s bump-review.md ] && [ -z "$TRUNCATED" ] && head -1 bump-review.md | grep -q '^✅'; then
+  wait_required "$PR" "${SP_REQUIRED[@]}"
+  gh pr view "$PR" --json body -q .body | sed 's/^- \[ \] CI/- [x] CI/' > "$WORK/body.md"
+  gh pr edit "$PR" --body-file "$WORK/body.md"
+  # only the commit this job pushed: a later push to the branch isn't what was reviewed
+  gh pr merge "$PR" --squash --delete-branch --match-head-commit "$SP_HEAD" --subject "opendbc_repo: bluepilot-lateral $TAG" \
+    --body "opendbc_repo moves to ford-op/opendbc bp-opendbc ${BG:0:8} (bluepilot-lateral $TAG). No F-150 change; merged on green."
+  echo "bp-sunnypilot: merged $PR"
+else
+  echo "bp-sunnypilot: $PR waits for a maintainer (no review, a cut diff, or a change for the F-150)"
+fi

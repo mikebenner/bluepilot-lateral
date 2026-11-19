@@ -68,6 +68,17 @@ class BPLateralMatrixMixin:
   def test_controller_limits_pass_safety(self):
     pass
 
+  # IQ.Pilot's test_ford (from beta b589c894, upstream's error-band rework): the stock error band's relaxed
+  # wind-down, and the stock controller against it with a measured-curvature offset. BluePilot's band is its
+  # own (test_ford_bluepilot_limits: test_curvature_error_band_convergence).
+  @unittest.skip(SKIP_REASON)
+  def test_curvature_error_relaxed_rate_limits(self):
+    pass
+
+  @unittest.skip(SKIP_REASON)
+  def test_controller_limits_pass_safety_with_curvature_offset(self):
+    pass
+
   def test_max_lateral_acceleration(self):
     """BluePilot's cap (CAN FD only) at ISO_LATERAL_ACCEL - g*roll over the fudged speed squared."""
     for speed in (12.0, 15.0, 20.0, 25.0, 30.0, 35.0):

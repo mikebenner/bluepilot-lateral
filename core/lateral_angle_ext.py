@@ -59,6 +59,7 @@ from .lateral_curv_ext import LateralResult
 from .lane_center_trim import LaneCenterTrim
 from .values_ext import (
   ANGLE_GAIN_CAN, ANGLE_GAIN_CANFD_BOF, ANGLE_GAIN_CANFD_BOF_CARS, ANGLE_GAIN_CANFD_SUV, ANGLE_GAIN_CANFD_SUV_CARS,
+  ANGLE_GAIN_EXPEDITION, ANGLE_GAIN_EXPEDITION_CARS,
   BP_ANGLE_LIMITS, LANE_CHANGE_FACTOR_BP, LANE_CHANGE_FACTOR_LOW,
 )
 from .values_ext import MODEL_T_IDXS
@@ -255,7 +256,9 @@ class LateralAngleExt:
   def update_angle_params(self, params):
     """Sets per-platform gain defaults and reads user angle-tuning params."""
     fp = getattr(self.CP, 'carFingerprint', '')
-    if fp in ANGLE_GAIN_CANFD_BOF_CARS:
+    if fp in ANGLE_GAIN_EXPEDITION_CARS:
+      low, high = ANGLE_GAIN_EXPEDITION
+    elif fp in ANGLE_GAIN_CANFD_BOF_CARS:
       low, high = ANGLE_GAIN_CANFD_BOF
     elif fp in ANGLE_GAIN_CANFD_SUV_CARS:
       low, high = ANGLE_GAIN_CANFD_SUV

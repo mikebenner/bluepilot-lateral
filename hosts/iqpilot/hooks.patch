@@ -50,7 +50,7 @@ index e00869f..cf8e4ba 100644
  
      ### longitudinal control ###
 diff --git a/iqdbc/car/structs.py b/iqdbc/car/structs.py
-index 520c7fc..5f95bbd 100644
+index 924d3e5..56b67fc 100644
 --- a/iqdbc/car/structs.py
 +++ b/iqdbc/car/structs.py
 @@ -4,6 +4,7 @@ from typing import dataclass_transform, get_origin
@@ -66,17 +66,17 @@ index 520c7fc..5f95bbd 100644
    stoppingDecelRateOverride: float = auto_field()
    longActiveWithGasOverride: bool = auto_field()
 +  lateralInputsRequired: bool = auto_field()  # BluePilot: controlsd fills IQCarControl.lateralInputs and params
+   longitudinalActuation: 'IQCarParams.LongitudinalActuation' = field(default_factory=lambda: IQCarParams.LongitudinalActuation())
  
-   iqLateralNet: 'IQCarParams.LateralNet' = field(default_factory=lambda: IQCarParams.LateralNet())
- 
-@@ -120,6 +122,7 @@ class IQCarControl:
+   @auto_dataclass
+@@ -136,6 +138,7 @@ class IQCarControl:
    useRadarAccel: bool = auto_field()
    radarSetSpeedKph: float = auto_field()
    radarGapBars: int = auto_field()
 +  lateralInputs: 'LateralInputs' = field(default_factory=lambda: LateralInputs())  # BluePilot
+   longitudinalComfort: 'IQCarControl.LongitudinalComfort' = field(default_factory=lambda: IQCarControl.LongitudinalComfort())
  
    @auto_dataclass
-   class Param:
 diff --git a/iqdbc/lvbs/car/interfaces.py b/iqdbc/lvbs/car/interfaces.py
 index 5ca575a..aafd822 100644
 --- a/iqdbc/lvbs/car/interfaces.py

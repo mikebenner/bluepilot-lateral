@@ -26,7 +26,9 @@ jobs:
     timeout-minutes: 90
     outputs:
       head: ${{ steps.head.outputs.head }}
+      pin: ${{ steps.head.outputs.pin }}
       moved: ${{ steps.head.outputs.moved }}
+      changed: ${{ steps.changed.outputs.changed }}
       tree: ${{ steps.tree.outcome }}
       test: ${{ steps.test.outcome }}
       state: ${{ steps.state.outputs.state }}
@@ -43,7 +45,7 @@ jobs:
         head=$(git ls-remote "$repo" refs/heads/beta | cut -f1)
         if ! [[ "$head" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::couldn't read beta from $repo"; exit 1; fi
         echo "pinned ${pin:0:8}, beta ${head:0:8}"
-        { echo "head=$head"; echo "moved=$([ "$head" != "$pin" ] && echo yes || echo no)"; } >> "$GITHUB_OUTPUT"
+        { echo "head=$head"; echo "pin=$pin"; echo "moved=$([ "$head" != "$pin" ] && echo yes || echo no)"; } >> "$GITHUB_OUTPUT"
     - name: Host tree at the new beta
       id: tree
       if: steps.head.outputs.moved == 'yes'
@@ -51,6 +53,19 @@ jobs:
       env:
         HEAD_SHA: ${{ steps.head.outputs.head }}
       run: lib/hosts/iqpilot/host.sh tree w "$HEAD_SHA"
+    - name: Hooked files that moved
+      id: changed
+      if: steps.head.outputs.moved == 'yes'
+      env:
+        HEAD_SHA: ${{ steps.head.outputs.head }}
+        PIN: ${{ steps.head.outputs.pin }}
+      run: |
+        # the files hooks.patch edits, as IQPilot lays them out; for the issue
+        project=$(sed -n 's/^PROJECT=\([^ ]*\).*/\1/p' lib/hosts/iqpilot/host.sh)
+        files=$(sed -n "s#^diff --git a/\([^ ]*\) .*#$project/\1#p" lib/hosts/iqpilot/hooks.patch)
+        # shellcheck disable=SC2086 # a list of paths
+        stat=$(git -C w/iq diff --stat "$PIN" "$HEAD_SHA" -- $files 2>/dev/null || echo "(no tree to diff)")
+        { echo "changed<<EOF"; echo "${stat:-none}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
     - name: Tests at the new beta
       id: test
       if: steps.head.outputs.moved == 'yes' && steps.tree.outcome == 'success'
@@ -85,6 +100,8 @@ jobs:
         GH_TOKEN: ${{ steps.app.outputs.token }}
         REPO: ${{ github.repository }}
         HEAD_SHA: ${{ needs.check.outputs.head }}
+        PIN: ${{ needs.check.outputs.pin }}
+        CHANGED: ${{ needs.check.outputs.changed }}
         TREE: ${{ needs.check.outputs.tree }}
         TEST: ${{ needs.check.outputs.test }}
         STATE: ${{ needs.check.outputs.state }}
@@ -97,13 +114,30 @@ jobs:
 
         # red: one standing issue, rewritten each night; the pin stays where it passed
         if [ "$TREE" != success ] || [ "$TEST" != success ]; then
+          web=$(sed -n 's/^REPO=//p' lib/hosts/iqpilot/host.sh | sed 's/\.git$//')
           if [ "$TREE" != success ]; then step="the host tree (\`host.sh tree\`)"; else step="the tests (\`host.sh test\`)"; fi
+          case "$TREE/$state" in
+            success/*) what="The tree built and the hooks applied, but the tests failed (\`host.sh test\`): see the run. Fix what broke, or add a test IQPilot itself breaks to \`hosts/iqpilot/known_failures.txt\`." ;;
+            */drifted:\ hooks.patch*) what="IQPilot changed one of the files the hook patch edits, so the patch no longer applies (IQPilot doesn't carry the hooks itself). Rebase the patch: in \`<dir>/host\`, \`git apply --reject hosts/iqpilot/hooks.patch\`, fix the \`.rej\` hunks by hand, then \`host.sh make <dir>\` rewrites \`hooks.patch\`." ;;
+            */drifted:*) what="IQPilot carries a copy of the library that differs from the release its \`VERSION\` names: \`tools/check_vendored.sh\` says what they edited. Get the edits into the library (or IQPilot back to a release) before moving the pin." ;;
+            *) what="The host tree didn't build (\`host.sh tree\`): see the run. Usually IQPilot moved or renamed something \`host.sh\` expects (iqdbc's folder, setup.sh, the imported packages)." ;;
+          esac
           {
-            echo "IQ.Lvbs's \`beta\` moved to \`${HEAD_SHA:0:8}\`, and $step failed on it: $RUN_URL"
+            echo "IQ.Lvbs's \`beta\` moved from the pinned [\`${PIN:0:8}\`]($web/commit/$PIN) to [\`${HEAD_SHA:0:8}\`]($web/commit/$HEAD_SHA) ([compare]($web/compare/$PIN...$HEAD_SHA)), and $step failed on it: $RUN_URL"
+            echo
+            echo "**What happened:** $what"
             echo
             echo "Hooks: $state."
             echo
-            echo "The pin stays at the last \`beta\` that passed, so the library's own CI isn't affected. To fix it, build the tree at the new commit (\`hosts/iqpilot/host.sh tree <dir> $HEAD_SHA\`), then update the hooks (edit \`<dir>/host\`, \`host.sh make\`) or \`known_failures.txt\` in a PR. This issue closes itself once a later \`beta\` passes."
+            echo "Files the hooks patch edits that changed between the two:"
+            echo
+            echo '```'
+            echo "$CHANGED"
+            echo '```'
+            echo
+            echo "**What to do:** \`hosts/iqpilot/host.sh tree <dir> $HEAD_SHA\` builds the tree at the new commit (it stops at the same failure), then \`host.sh test <dir>\` runs the tests. With it green, move \`PIN\` in \`hosts/iqpilot/host.sh\` to \`$HEAD_SHA\` and open a PR with the fix."
+            echo
+            echo "The pin stays at \`${PIN:0:8}\` until then, so the library's own CI isn't affected. This issue closes itself once a later \`beta\` passes."
           } > issue.md
           if [ -n "$issue" ]; then gh issue edit "$issue" -R "$REPO" --body-file issue.md; else gh issue create -R "$REPO" --title "$ISSUE_TITLE" --body-file issue.md; fi
           echo "::error::IQPilot beta ${HEAD_SHA:0:8}: $step failed; see the issue"

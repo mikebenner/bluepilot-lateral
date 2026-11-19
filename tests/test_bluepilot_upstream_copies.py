@@ -25,7 +25,7 @@ PINNED = {
     ("car/ford/fordcan.py", "create_lat_ctl2_msg"): "1653ca5622eccc77",      # bluepilot_lateral/can/fordcan_ext.py
   },
   "iqpilot": {  # IQ.Pilot: Ford on the native-curvature names; its packer leaves the LMC2 checksum to fordcan.py
-    ("safety/lateral.h", "steer_native_curvature_cmd_checks"): "8088e24c40855caa",  # ford_bp_curvature_cmd_checks, bluepilot_lateral/safety/lateral.h
+    ("safety/lateral.h", "steer_native_curvature_cmd_checks"): "adb2981b8d1b69ac",  # ford_bp_curvature_cmd_checks, bluepilot_lateral/safety/lateral.h
     ("car/ford/fordcan.py", "create_lka_msg"): "c7e38e4f0215dcf4",                  # bluepilot_lateral/can/fordcan_ext.py
     ("car/ford/fordcan.py", "create_lat_ctl_msg"): "f00a87f31389cb91",              # bluepilot_lateral/can/fordcan_ext.py
     ("car/ford/fordcan.py", "create_lat_ctl2_msg"): "4147e71aa7c6c51f",             # bluepilot_lateral/can/fordcan_ext.py

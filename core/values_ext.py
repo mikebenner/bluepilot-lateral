@@ -139,16 +139,22 @@ LANE_CHANGE_FACTOR_LOW = 0.95
 # platform gets ANGLE_GAIN_CAN. Read by lateral_angle_ext.update_angle_params.
 # CAN vehicles (Escape MK4, Bronco Sport, Explorer, Maverick, Edge)
 ANGLE_GAIN_CAN = (1.00, 1.15)
-# CAN-FD body-on-frame trucks (F-150, Lightning, Expedition, Ranger)
+# CAN-FD body-on-frame trucks (F-150, Lightning, Ranger)
 ANGLE_GAIN_CANFD_BOF = (0.95, 0.95)
+# Expedition MK4: its own base, 1.5x the body-on-frame values, as BluePilot 7 has since
+# BluePilotDev/bluepilot#220 (an owner had FordHighSpeedFactor_ang at its 1.5 ceiling and wanted more).
+# Provisional there too; kept so a truck moving from BP7 steers the same with the same settings.
+ANGLE_GAIN_EXPEDITION = (ANGLE_GAIN_CANFD_BOF[0] * 1.5, ANGLE_GAIN_CANFD_BOF[1] * 1.5)
 # CAN-FD unibody SUVs (Mustang Mach-E, Escape MK4.5)
 ANGLE_GAIN_CANFD_SUV = (1.00, 1.05)
 
 ANGLE_GAIN_CANFD_BOF_CARS = frozenset({
   "FORD_F_150_MK14",
   "FORD_F_150_LIGHTNING_MK1",
-  "FORD_EXPEDITION_MK4",
   "FORD_RANGER_MK2",
+})
+ANGLE_GAIN_EXPEDITION_CARS = frozenset({
+  "FORD_EXPEDITION_MK4",
 })
 ANGLE_GAIN_CANFD_SUV_CARS = frozenset({
   "FORD_MUSTANG_MACH_E_MK1",

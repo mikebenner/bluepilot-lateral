@@ -68,6 +68,12 @@ from ..params.manifest import default, value
 # DBC ``LatCtlPath_An_Actl`` (rad) — panda safety uses the same in ``ford.h``; PSCM enforces in firmware.
 FORD_DBC_PATH_ANGLE_MIN = -0.5
 FORD_DBC_PATH_ANGLE_MAX = 0.5235
+# The largest path_angle, either way, as this file holds it. The car controller sends -path_angle (step_lateral in
+# carcontroller_ext.py), so the signal's minimum bounds this value from above. The signal is unsigned on the wire
+# (11 bits, offset -0.5): a value 0.0005 below its minimum packs as its maximum, +0.5235, a full-scale command the other
+# way. The other side keeps the -0.5 it had, so both directions have the same limit and the wire never carries more
+# than +-0.5.
+PATH_ANGLE_LIMIT = -FORD_DBC_PATH_ANGLE_MIN
 
 
 # PSCM d_ref (m) vs speed (m/s) — 6 points; above ~55.6 m/s use plateau + optional cap to 5 m.
@@ -575,7 +581,7 @@ class LateralAngleExt:
     elif _pscm_lim >= 1:  # LimitClose (F150/non-angle-mode only): block increases only
       path_angle = float(clip(path_angle, -abs(self.shared.path_angle_last), abs(self.shared.path_angle_last)))
 
-    path_angle = min(FORD_DBC_PATH_ANGLE_MAX, max(FORD_DBC_PATH_ANGLE_MIN, path_angle))
+    path_angle = min(PATH_ANGLE_LIMIT, max(-PATH_ANGLE_LIMIT, path_angle))
 
     # Soft ROC limit — unconditional, slightly tighter than ford.h, applied before the
     # hardware bypass in ford.h is re-enabled.  Lets us observe whether the limit would

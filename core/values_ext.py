@@ -100,6 +100,20 @@ FORD_PINION_WHEELBASE = {
   "FORD_F_150_MK14": 3.84,
 }
 
+# Pinion geometry rows (slip factor, steer ratio, wheelbase m) fitted to drive data, where CarSpecs is not this
+# vehicle's geometry. The C table row (ford_pinion_geometry in bluepilot_lateral/safety/ford.h) holds these values and
+# the geometry test checks it against them instead of CarSpecs. The Python pinion path is unchanged: it converts with
+# the learned steer ratio and stiffness (liveParameters), which already track the vehicle; only the panda's fixed row
+# needs the fit.
+# FORD_EXPEDITION_MK4: CarSpecs carries the F-150's 3.69 m wheelbase and 17.0 steer ratio, and with them the panda
+# reads curvature 9 to 30% high on a standard-wheelbase (3.112 m) 2023 Expedition. Fitted on 188 min of one truck's
+# drives against the yaw rate with its standstill offset removed (quasi-steady frames above 9 m/s): steer ratio x
+# wheelbase 65.7 m and slip factor -0.000684; on 86 further minutes the gain against truth is 0.95 to 1.08 by speed
+# band. Provisional: one vehicle (BluePilotDev/bluepilot-lateral#52).
+FORD_PINION_FITTED_GEOMETRY = {
+  "FORD_EXPEDITION_MK4": (-0.000684, 21.12, 3.112),
+}
+
 
 # BluePilot: Max curvature for steering command (m^-1), from DBC file limits
 CURVATURE_MAX = 0.02

@@ -21,7 +21,8 @@ const AngleSteeringParams *ford_bp_pinion_params = &ford_pinion_geometry[0];
 // bits 1-4. Row order and values must match FORD_PINION_GEOMETRY_INDEX in
 // bluepilot_lateral/core/values_ext.py (enforced by test_ford_bluepilot_pinion.py's
 // geometry test against CarSpecs + calc_slip_factor(VehicleModel(CP)), with the wheelbase
-// overrides in FORD_PINION_WHEELBASE applied).
+// overrides in FORD_PINION_WHEELBASE applied, or against FORD_PINION_FITTED_GEOMETRY for a row
+// fitted to drive data).
 // Index 0 is reserved as invalid; ford_bp_init disables the feature outright on a zero or
 // out-of-range index so a half-configured param can never select the wrong geometry.
 // FORD_EDGE_MK2 (ALT_STEER_ANGLE: relative pinion angle + learned offset) is unsupported
@@ -31,7 +32,7 @@ const AngleSteeringParams ford_pinion_geometry[FORD_PINION_GEOMETRY_ROWS] = {
   {.slip_factor = -0.00062819555f, .steer_ratio = 17.7f, .wheelbase = 2.670f},    // 1: FORD_BRONCO_SPORT_MK1
   {.slip_factor = -0.00061892325f, .steer_ratio = 16.7f, .wheelbase = 2.710f},    // 2: FORD_ESCAPE_MK4
   {.slip_factor = -0.00061892325f, .steer_ratio = 16.7f, .wheelbase = 2.710f},    // 3: FORD_ESCAPE_MK4_5
-  {.slip_factor = -0.00045454798f, .steer_ratio = 17.0f, .wheelbase = 3.690f},    // 4: FORD_EXPEDITION_MK4
+  {.slip_factor = -0.000684f, .steer_ratio = 21.12f, .wheelbase = 3.112f},        // 4: FORD_EXPEDITION_MK4 (fitted, FORD_PINION_FITTED_GEOMETRY)
   {.slip_factor = -0.00055447339f, .steer_ratio = 16.8f, .wheelbase = 3.025f},    // 5: FORD_EXPLORER_MK6
   {.slip_factor = -0.00062121569f, .steer_ratio = 15.0f, .wheelbase = 2.700f},    // 6: FORD_FOCUS_MK4
   {.slip_factor = -0.00045331952f, .steer_ratio = 16.9f, .wheelbase = 3.700f},    // 7: FORD_F_150_LIGHTNING_MK1

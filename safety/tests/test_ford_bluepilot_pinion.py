@@ -18,7 +18,7 @@ from ....car.ford.values import CAR
 from ....car.vehicle_model import VehicleModel, calc_slip_factor
 from ...core.values_ext import (
   FordSafetyFlagsSP, FORD_HOST_ONLY_PLATFORMS, FORD_NO_PINION_PLATFORMS, FORD_PINION_GEOMETRY_INDEX, FORD_PINION_GEOMETRY_SHIFT,
-  FORD_PINION_WHEELBASE,
+  FORD_PINION_WHEELBASE, FORD_PINION_FITTED_GEOMETRY,
 )
 from ...core.carcontroller_ext import pinion_vehicle_model, scale_tire_stiffness_per_mass
 from ....car.ford.interface import CarInterface
@@ -200,9 +200,14 @@ class TestFordBPPinionGeometryTable(unittest.TestCase):
   """The C geometry table must match CarSpecs + calc_slip_factor(VehicleModel(CP)) for every
   platform in FORD_PINION_GEOMETRY_INDEX, so it cannot rot as platforms change. Where BluePilot
   deliberately uses another wheelbase (FORD_PINION_WHEELBASE), the row uses that one, and so does
-  the Python pinion path."""
+  the Python pinion path. A row fitted to drive data (FORD_PINION_FITTED_GEOMETRY) holds the fitted values instead;
+  the Python pinion path keeps CarSpecs and the learned parameters for it."""
 
   def _assert_row_matches_carspecs(self, car, idx):
+    if car in FORD_PINION_FITTED_GEOMETRY:
+      for got, want in zip(GEOMETRY[idx], FORD_PINION_FITTED_GEOMETRY[car], strict=True):
+        self.assertAlmostEqual(got, want, delta=abs(want) * 1e-6, msg=str(car))
+      return
     specs = car.config.specs
     wheelbase = FORD_PINION_WHEELBASE.get(car, specs.wheelbase)
     center_to_front = wheelbase * specs.centerToFrontRatio
@@ -253,6 +258,24 @@ class TestFordBPPinionGeometryTable(unittest.TestCase):
       CP = CarInterface.get_non_essential_params(car)
       with self.subTest(car=car):
         self.assertAlmostEqual(pinion_vehicle_model(CP).l, CP.wheelbase, places=6)
+
+  def test_fitted_rows(self):
+    """A fitted row belongs to a platform that has a row, is not also given a pinion wheelbase (the two would
+    disagree about which wheelbase the row holds), and stays physically plausible: understeering, and a steer ratio
+    x wheelbase within 15% of CarSpecs', so a typo cannot move the panda's measurement far."""
+    for car, (slip, steer_ratio, wheelbase) in FORD_PINION_FITTED_GEOMETRY.items():
+      with self.subTest(car=car):
+        self.assertTrue(car in FORD_PINION_GEOMETRY_INDEX)
+        self.assertFalse(car in FORD_PINION_WHEELBASE)
+        self.assertLess(slip, 0)
+        self.assertGreater(slip, -0.002)
+        if car in set(CAR):
+          specs = CAR(car).config.specs
+          self.assertAlmostEqual(steer_ratio * wheelbase, specs.steerRatio * specs.wheelbase, delta=0.15 * specs.steerRatio * specs.wheelbase)
+
+  def test_expedition_row_is_the_fitted_one(self):
+    self.assertEqual(FORD_PINION_FITTED_GEOMETRY["FORD_EXPEDITION_MK4"], (-0.000684, 21.12, 3.112))
+    self.assertEqual(GEOMETRY[FORD_PINION_GEOMETRY_INDEX["FORD_EXPEDITION_MK4"]], (-0.000684, 21.12, 3.112))
 
   def test_invalid_index_row_is_inert(self):
     self.assertEqual(GEOMETRY[0], (0.0, 1.0, 1.0))

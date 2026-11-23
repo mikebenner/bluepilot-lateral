@@ -176,6 +176,11 @@ class FordF150PinionGeometry:  # GEOMETRY_INDEX only; BPPinionMixin.__init_subcl
   GEOMETRY_INDEX = 8
 
 
+class FordExpeditionPinionGeometry:  # GEOMETRY_INDEX only; BPPinionMixin.__init_subclass__ fills in the rest
+  """FORD_EXPEDITION_MK4, the fitted row (FORD_PINION_FITTED_GEOMETRY)."""
+  GEOMETRY_INDEX = 4
+
+
 class TestFordBPPinionLongitudinalSafety(FordExplorerPinionGeometry, BPPinionMixin, matrix.TestFordBPLongitudinalSafety):
   pass
 
@@ -194,6 +199,25 @@ class TestFordBPPinionBroncoSportSafety(FordBroncoSportPinionGeometry, BPPinionM
 
 class TestFordBPPinionF150Safety(FordF150PinionGeometry, BPPinionMixin, matrix.TestFordBPCANFDLongitudinalSafety):
   pass
+
+
+class TestFordBPPinionExpeditionSafety(FordExpeditionPinionGeometry, BPPinionMixin, matrix.TestFordBPCANFDStockSafety):
+  """The fitted Expedition row through the compiled firmware, on the configuration the truck runs (CAN FD, stock
+  longitudinal). The mixin's own measurement test derives its expectation from the same parsed row; this one pins
+  the compiled conversion to numbers worked out by hand from the fitted values."""
+
+  def test_expedition_measurement_by_hand(self):
+    # curvature = pinion angle [rad] / (21.12 * 3.112 * (1 + 0.000684 * v^2)), in CAN units of 2e-5 1/m
+    for angle_deg, speed, expect_can in ((60.0, 13.0, 714), (20.0, 20.0, 209), (5.0, 30.0, 41), (-60.0, 13.0, -714)):
+      with self.subTest(angle_deg=angle_deg, speed=speed):
+        for _ in range(14):  # as _reset_curvature_measurement: enough frames for the rx counter to sync and fill the samples
+          self._rx(self._speed_msg(speed))
+          self._rx(self._speed_msg_2(speed))
+          values = {"StePinComp_An_Est": angle_deg, "StePinCompAnEst_D_Qf": 3, "StePinAn_No_Cnt": self.cnt_pinion % 16}
+          self.__class__.cnt_pinion += 1
+          self._rx(self.packer.make_can_msg_safety("SteeringPinion_Data", 0, values))
+        self.assertAlmostEqual(self.safety.get_curvature_meas_min(), expect_can, delta=1)
+        self.assertAlmostEqual(self.safety.get_curvature_meas_max(), expect_can, delta=1)
 
 
 class TestFordBPPinionGeometryTable(unittest.TestCase):

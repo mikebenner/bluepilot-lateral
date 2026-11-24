@@ -114,6 +114,20 @@ FORD_PINION_FITTED_GEOMETRY = {
   "FORD_EXPEDITION_MK4": (-0.000684, 21.12, 3.112),
 }
 
+# With the pinion source on, the panda accepts a shadow curvature within this much of its own measurement
+# (FORD_LIMITS(_, 150) in bluepilot_lateral/safety/ford.h; 150 units of 2e-5 1/m), and the Python side keeps what it
+# sends this far inside that band (carcontroller_ext.InputTracker.panda_band). The panda measures from the raw
+# pinion angle through its fixed geometry row; the Python side measures with the learned steer ratio, stiffness, angle
+# offset and roll. The two normally agree to well under the 50 units between the Python clip (100) and the band, but
+# not always: with the learned values at their defaults the gap is 61 units at 60 deg of wheel and 13 m/s on the
+# Expedition, and a command at the edge of the Python clip then leaves the band and the panda drops the frame. The
+# panda checks against the minimum and maximum of its last six samples, which already covers a wheel that is moving.
+# The margin is for the rest: rounding on both sides, the 0.1 deg pinion resolution (about 1 unit), speed sampled a
+# few ms apart, and this frame's sample falling just outside those six. It does not cover a fast reversal; that
+# frame is dropped, as it would be without this.
+PINION_SHADOW_BAND = 0.003
+PINION_SHADOW_BAND_MARGIN = 0.0004
+
 
 # BluePilot: Max curvature for steering command (m^-1), from DBC file limits
 CURVATURE_MAX = 0.02

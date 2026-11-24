@@ -285,6 +285,7 @@ class LateralAngleExt:
     """
     v_ego = float(CS.out.vEgoRaw)
     d_ref = pscm_d_ref_m(v_ego)  # noqa: F841  # BluePilot: unused today; kept verbatim from bp-dev
+    self.inputs.bp_panda_band_limited = self.inputs.bp_panda_band_disjoint = False  # this step's telemetry
 
     curvature_rate = 0.0
     path_offset = 0.0
@@ -308,7 +309,7 @@ class LateralAngleExt:
       # ford.h's deviation check compares a zero shadow against real measured curvature.
       # (ford.h skips the check while steer_control_enabled is 0, so the value is free to
       # follow the measurement during the inactive period itself.)
-      self.bp_kappa_cmd = self.inputs.get_current_curvature(CS)
+      self.bp_kappa_cmd = self.inputs.get_shadow_of_measurement(CS)
       self.shared.human_turn_detector.reset()
       self.angle_human_turn_active = False
       self.lane_center_trim.reset()
@@ -348,7 +349,7 @@ class LateralAngleExt:
       # Truthful shadow during the override (mirrors the inactive path -- see the comment
       # there): the driver is steering, so the honest command is the car's actual curvature,
       # and the panda-latched shadow stays current for the re-engage frame.
-      self.bp_kappa_cmd = self.inputs.get_current_curvature(CS)
+      self.bp_kappa_cmd = self.inputs.get_shadow_of_measurement(CS)
       # Keep exit detection current so resume doesn't compare against a stale pre-turn value.
       self._desired_curvature_last = float(actuators.curvature)
       self.lane_center_trim.reset()
@@ -400,7 +401,7 @@ class LateralAngleExt:
       self.shared.bp_curvature_deviation_limited = False
       self.sim_curvature_last = 0.0
       # Truthful shadow during the blip (see the inactive-path comment).
-      self.bp_kappa_cmd = self.inputs.get_current_curvature(CS)
+      self.bp_kappa_cmd = self.inputs.get_shadow_of_measurement(CS)
       self._desired_curvature_last = float(actuators.curvature)
       self.lane_center_trim.reset()
       self.shared.precision_type = 1
@@ -539,6 +540,11 @@ class LateralAngleExt:
       # BluePilot: did this clip actually constrain kappa_cmd this frame (deviation from measured,
       # not rate-of-change)? The BluePilot UI's deviation flag.
       self.shared.bp_curvature_deviation_limited = bool(abs(kappa_cmd - _kappa_cmd_pre_error_clip) > 1e-9)
+      # With the pinion source on the panda checks against its own measurement, not this one. Keep the command in
+      # the part of the window above that the panda also accepts (InputTracker.clip_command_to_panda_band); it never
+      # leaves that window, and the flag above stays the deviation clip's alone. Untouched with the yaw source.
+      kappa_cmd = self.inputs.clip_command_to_panda_band(kappa_cmd, current_curvature - CarControllerParams.CURVATURE_ERROR,
+                                                         current_curvature + CarControllerParams.CURVATURE_ERROR, CS)
 
     lateral_uncertainty = 0.0  # no curvature-limit ladder until angle-mode torque display is defined
 
@@ -619,7 +625,7 @@ class LateralAngleExt:
     # in-drive lateral safety block observed across ~3h of replayed road-test routes was exactly
     # this (driver fighting a sustained curve with the mode still enabled). The honest command
     # during a press is the driver's actual curvature.
-    self.bp_kappa_cmd = self.inputs.get_current_curvature(CS) if CS.out.steeringPressed else kappa_cmd
+    self.bp_kappa_cmd = self.inputs.get_shadow_of_measurement(CS) if CS.out.steeringPressed else kappa_cmd
 
     # BluePilot: would the equivalent curvature (kappa_cmd) have been rate-limited by curvature-mode's
     # ROC (apply_std_steer_angle_limits)? kappa_cmd is already error-clipped above (same clip

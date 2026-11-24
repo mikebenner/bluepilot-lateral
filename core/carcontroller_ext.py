@@ -27,13 +27,15 @@ except ImportError:
   def scale_tire_stiffness_per_mass(wheelbase, center_to_front, tire_stiffness_factor):
     return scale_tire_stiffness(1.0, wheelbase, center_to_front, tire_stiffness_factor)
 from ...car.ford.values import CarControllerParams, FordFlags
-from ...car.vehicle_model import VehicleModel
+from ...car.vehicle_model import VehicleModel, calc_slip_factor
 from ..can import fordcan_ext
 from .lateral_angle_ext import LateralAngleExt
 from .lateral_curv_ext import LateralCurvExt, PrimaryLateralControl
 from ..params.manifest import value
 from ..params.param_store import ParamStore
-from .values_ext import FORD_PINION_WHEELBASE, FordSafetyFlagsSP
+from .values_ext import (
+  FORD_PINION_FITTED_GEOMETRY, FORD_PINION_WHEELBASE, FordSafetyFlagsSP, PINION_SHADOW_BAND, PINION_SHADOW_BAND_MARGIN,
+)
 from .human_turn import HumanTurnDetector
 from ..host_types import LateralInputs, LateralStatus
 from .lateral_inputs import ModelView, VehicleParamsView, lateral_inputs_complete
@@ -58,6 +60,18 @@ def pinion_vehicle_model(CP):
     mass=1.0, rotationalInertia=inertia, tireStiffnessFront=front, tireStiffnessRear=rear, steerRatioRear=0.))
 
 
+def panda_pinion_geometry(CP):
+  """(slip factor, steer ratio, wheelbase) of this platform's row in the panda's ford_pinion_geometry table
+  (bluepilot_lateral/safety/ford.h): the fitted row where there is one, else CarSpecs through the same vehicle model the
+  table was generated from. safety/tests/test_ford_bluepilot_panda_band.py checks it against the C table for every
+  platform."""
+  fitted = FORD_PINION_FITTED_GEOMETRY.get(CP.carFingerprint)
+  if fitted is not None:
+    return fitted
+  VM = pinion_vehicle_model(CP)
+  return calc_slip_factor(VM), CP.steerRatio, VM.l
+
+
 class InputTracker:
   """The model / vehicle-parameter inputs both strategies read, and the car's measured curvature.
   Owned by BluePilotLateral and updated once per frame from the host's LateralInputs, before either
@@ -76,6 +90,13 @@ class InputTracker:
     # state from the startup safety bits (values_ext.ford_safety_param), never a live settings read:
     # a live flip against stale firmware would fight the panda.
     self.bp_pinion_curvature_enabled = bool(safety_param & FordSafetyFlagsSP.STEER_ANGLE_CURVATURE)
+
+    # The panda's own geometry row, for panda_band: only with the pinion source on. With the yaw source the
+    # panda measures exactly as get_current_curvature does, and there is nothing to reconcile.
+    self.panda_geometry = panda_pinion_geometry(CP) if self.bp_pinion_curvature_enabled else None
+    # telemetry for the last lateral step (LateralAngleExt clears both at the start of each step)
+    self.bp_panda_band_limited = False   # clip_command_to_panda_band moved the command
+    self.bp_panda_band_disjoint = False  # the deviation window and the panda's band did not overlap
 
   def get_current_curvature(self, CS):
     """Measured curvature of the car right now (OP sign convention).
@@ -103,6 +124,56 @@ class InputTracker:
       return -self.VM.calc_curvature(math.radians(CS.out.steeringAngleDeg - angle_offset_deg),
                                      CS.out.vEgoRaw, roll)
     return -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
+
+  def get_panda_curvature(self, CS):
+    """The curvature the panda measures right now (OP sign), by its own arithmetic: the raw pinion angle through its
+    fixed geometry row, with no angle offset, roll or learned parameter (ford_bp_rx_hook). None with the yaw source,
+    where the panda's measurement is get_current_curvature's."""
+    if self.panda_geometry is None:
+      return None
+    slip_factor, steer_ratio, wheelbase = self.panda_geometry
+    v = max(CS.out.vEgoRaw, 0.1)
+    return -math.radians(CS.out.steeringAngleDeg) / (steer_ratio * wheelbase * (1.0 - slip_factor * v * v))
+
+  def panda_band(self, CS):
+    """(low, high), OP sign: the range the panda will accept as shadow curvature right now, less the margin
+    (values_ext.PINION_SHADOW_BAND / _MARGIN). None with the yaw source."""
+    center = self.get_panda_curvature(CS)
+    if center is None:
+      return None
+    half = PINION_SHADOW_BAND - PINION_SHADOW_BAND_MARGIN
+    return center - half, center + half
+
+  def clip_command_to_panda_band(self, kappa: float, low: float, high: float, CS) -> float:
+    """kappa, already inside the deviation window [low, high], moved into the part of that window the panda will also
+    accept. It never leaves [low, high]: the panda's band only narrows the window, it does not replace it. Where the two
+    do not overlap no command satisfies both; kappa is then returned as it came (the panda drops the frame, as it
+    would without this) and bp_panda_band_disjoint is set. With the yaw source kappa is returned untouched.
+
+    Against the alternative this is never further from the request: a dropped frame leaves the PSCM on the previous
+    frame's command for another 50 ms."""
+    self.bp_panda_band_limited = False
+    self.bp_panda_band_disjoint = False
+    band = self.panda_band(CS)
+    if band is None:
+      return kappa
+    lo, hi = max(low, band[0]), min(high, band[1])
+    if lo > hi:
+      self.bp_panda_band_disjoint = True
+      return kappa
+    out = min(max(kappa, lo), hi)
+    self.bp_panda_band_limited = out != kappa
+    return out
+
+  def get_shadow_of_measurement(self, CS) -> float:
+    """What angle mode publishes as shadow curvature while nothing is steered from it (inactive, driver override,
+    stall blip, pressed): the measured curvature, kept inside the panda's band so the value the panda has latched at
+    the next enabled frame is one it accepts. get_current_curvature itself with the yaw source."""
+    measured = self.get_current_curvature(CS)
+    band = self.panda_band(CS)
+    if band is None:
+      return measured
+    return min(max(measured, band[0]), band[1])
 
   def update(self, li: LateralInputs):
     """Take this frame's model / vehicle-parameter inputs from the host and update the vehicle model.

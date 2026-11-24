@@ -161,15 +161,28 @@ class TestPandaBandClip(unittest.TestCase):
   def test_shadow_of_measurement(self):
     t = tracker(EXPEDITION)
     cs = car_state(13.0, 60.0)
-    low, high = t.panda_band(cs)
-    measured = t.get_current_curvature(cs)  # default model: -775 units, inside the band around -714
+    low, high = t.panda_band(cs)             # -844 to -584 units around the panda's -714
+    measured = t.get_current_curvature(cs)   # default model: -775, inside the band
     self.assertEqual(t.get_shadow_of_measurement(cs), measured)
-    t.VM.update_params(1.0, 30.0)           # -439: outside, published at the band's edge
+    t.VM.update_params(1.0, 24.0)            # -549: 165 from the panda's, the windows still overlap: the band's edge
+    self.assertAlmostEqual(t.get_current_curvature(cs) * CURVATURE_TO_CAN, -549, delta=1)
     self.assertEqual(t.get_shadow_of_measurement(cs), high)
-    t.clip_command_to_panda_band(measured, measured - E, measured + E, cs)
-    limited, disjoint = t.bp_panda_band_limited, t.bp_panda_band_disjoint
-    t.get_shadow_of_measurement(cs)         # does not touch the command's flags
-    self.assertEqual((t.bp_panda_band_limited, t.bp_panda_band_disjoint), (limited, disjoint))
+    t.VM.update_params(1.0, 30.0)            # -439: 275 away, no overlap: published as it is, for the panda to judge
+    self.assertEqual(t.get_shadow_of_measurement(cs), t.get_current_curvature(cs))
+    self.assertGreater(t.get_current_curvature(cs), high)
+
+  def test_shadow_of_measurement_leaves_the_commands_flags(self):
+    t = tracker(EXPEDITION)
+    cs = car_state(13.0, 60.0)
+    measured = t.get_current_curvature(cs)
+    for ratio, flags in ((17.0, (True, False)), (30.0, (False, True))):   # the guard moved the lead; the windows are disjoint
+      t.VM.update_params(1.0, ratio)
+      m = t.get_current_curvature(cs)
+      t.clip_command_to_panda_band(m - E, m - E, m + E, cs)
+      self.assertEqual((t.bp_panda_band_limited, t.bp_panda_band_disjoint), flags)
+      t.get_shadow_of_measurement(cs)
+      self.assertEqual((t.bp_panda_band_limited, t.bp_panda_band_disjoint), flags)
+    self.assertLess(measured, 0)
 
 
 def strategy(pinion: bool = True):
@@ -239,12 +252,72 @@ class TestPandaBandInTheStrategy(unittest.TestCase):
         self.assertAlmostEqual(kappa, edge, places=12)
       self.assertTrue(a.inputs.bp_panda_band_disjoint)
 
-  def test_pressed_publishes_the_measurement_inside_the_band(self):
+  def _with_ratio(self, ratio):
     a = strategy()
-    a.inputs.lp = SimpleNamespace(steerRatio=30.0, stiffnessFactor=1.0, roll=0.0, angleOffsetDeg=0.0)
-    a.inputs.VM.update_params(1.0, 30.0)
+    a.inputs.lp = SimpleNamespace(steerRatio=ratio, stiffnessFactor=1.0, roll=0.0, angleOffsetDeg=0.0)
+    a.inputs.VM.update_params(1.0, ratio)
+    return a, a.inputs.get_current_curvature(car_state(self.SPEED, self.ANGLE))
+
+  def test_pressed_publishes_the_measurement_inside_the_band(self):
+    """Pressed, with the two measurements 165 units apart (the windows overlap): the published value is the
+    measurement moved to the band's edge."""
+    a, measured = self._with_ratio(24.0)
+    self.assertAlmostEqual((measured - self.panda) * CURVATURE_TO_CAN, 165, delta=2)
     kappa, _ = ticks(a, 0.0, self.SPEED, self.ANGLE, pressed=True, frames=3)[-1]
     self.assertAlmostEqual(kappa, self.panda + HALF, places=12)
+
+  def test_pressed_does_not_hide_a_large_disagreement(self):
+    """Pressed, 275 units apart (no overlap): the measurement is published as it is, outside the panda's band, so a
+    requesting frame cannot pass the panda's check on a value moved to meet it."""
+    a, measured = self._with_ratio(30.0)
+    kappa, _ = ticks(a, 0.0, self.SPEED, self.ANGLE, pressed=True, frames=3)[-1]
+    self.assertEqual(kappa, measured)
+    self.assertGreater(abs(kappa - self.panda), PINION_SHADOW_BAND)
+    self.assertTrue(a.inputs.bp_panda_band_disjoint)
+
+  def test_the_actuator_follows_the_guarded_command(self):
+    """The path angle is derived from the guarded command, not from the one before the guard: against the same
+    strategy with the guard taken out, the settled path angle is smaller by the same ratio as the command."""
+    request = self.measured * 3
+    a = strategy()
+    guarded = ticks(a, request, self.SPEED, self.ANGLE)
+    b = strategy()
+    b.inputs.clip_command_to_panda_band = lambda kappa, low, high, CS: kappa
+    unguarded = ticks(b, request, self.SPEED, self.ANGLE)
+    (kg, pg), (ku, pu) = guarded[-1], unguarded[-1]
+    self.assertAlmostEqual(ku, self.measured - E, places=12)   # the deviation edge, 875 units
+    self.assertAlmostEqual(kg, self.panda - HALF, places=12)   # the band's edge, 844 units
+    self.assertEqual(guarded[-1], guarded[-2])                 # both settled
+    self.assertEqual(unguarded[-1], unguarded[-2])
+    self.assertLess(abs(pg), abs(pu))
+    self.assertAlmostEqual(pg / pu, kg / ku, places=9)
+
+  def test_guard_alone_does_not_set_the_deviation_flag(self):
+    """A request inside the deviation window but outside the panda's band: the guard moves it, and the deviation flag,
+    which the stall detector reads, stays clear."""
+    a = strategy()
+    request = self.measured - 0.0017   # 860 units: inside 675..875, outside the band's 844
+    kappa, _ = ticks(a, request, self.SPEED, self.ANGLE, frames=5)[-1]
+    self.assertAlmostEqual(kappa, self.panda - HALF, places=12)
+    self.assertTrue(a.inputs.bp_panda_band_limited)
+    self.assertFalse(a.shared.bp_curvature_deviation_limited)
+
+  def test_press_and_release(self):
+    """Hands off with the guard binding, a short press, then release: the published value is the guarded command,
+    then the measurement, then the guarded command again, and the path angle never moves faster than its rate limit."""
+    a = strategy()
+    request = self.measured * 3
+    out = ticks(a, request, self.SPEED, self.ANGLE, frames=20)
+    out += ticks(a, request, self.SPEED, self.ANGLE, pressed=True, frames=10)   # too short for the human-turn latch
+    out += ticks(a, request, self.SPEED, self.ANGLE, frames=10)
+    self.assertFalse(a.angle_human_turn_active)
+    for kappa, _ in out[:20] + out[30:]:
+      self.assertAlmostEqual(kappa, self.panda - HALF, places=12)
+    for kappa, _ in out[20:30]:
+      self.assertAlmostEqual(kappa, self.measured, places=12)   # the default model's measurement is inside the band
+    steps = [abs(out[i + 1][1] - out[i][1]) for i in range(len(out) - 1)]
+    self.assertLessEqual(max(steps), 0.055 + 1e-12)
+    self.assertEqual(out[19][1], out[39][1])   # back at the same settled path angle
 
   def test_below_the_speed_gate_nothing_is_clipped(self):
     a = strategy()

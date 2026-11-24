@@ -147,8 +147,8 @@ class InputTracker:
   def clip_command_to_panda_band(self, kappa: float, low: float, high: float, CS) -> float:
     """kappa, already inside the deviation window [low, high], moved into the part of that window the panda will also
     accept. It never leaves [low, high]: the panda's band only narrows the window, it does not replace it. Where the two
-    do not overlap no command satisfies both; kappa is then returned as it came (the panda drops the frame, as it
-    would without this) and bp_panda_band_disjoint is set. With the yaw source kappa is returned untouched.
+    do not overlap no command satisfies both; kappa is then returned as it came, the panda is left to judge the frame as
+    it would without this, and bp_panda_band_disjoint is set. With the yaw source kappa is returned untouched.
 
     Against the alternative this is never further from the request: a dropped frame leaves the PSCM on the previous
     frame's command for another 50 ms."""
@@ -168,10 +168,16 @@ class InputTracker:
   def get_shadow_of_measurement(self, CS) -> float:
     """What angle mode publishes as shadow curvature while nothing is steered from it (inactive, driver override,
     stall blip, pressed): the measured curvature, kept inside the panda's band so the value the panda has latched at
-    the next enabled frame is one it accepts. get_current_curvature itself with the yaw source."""
+    the next enabled frame is one it accepts. get_current_curvature itself with the yaw source.
+
+    The same limit as the command: where the deviation window around the measurement and the panda's band do not
+    overlap, the measurement is published as it is. The two sides then disagree by more than this is meant to
+    reconcile, and a pressed frame must not pass the panda's check on a value moved to meet it."""
     measured = self.get_current_curvature(CS)
     band = self.panda_band(CS)
     if band is None:
+      return measured
+    if measured - CarControllerParams.CURVATURE_ERROR > band[1] or measured + CarControllerParams.CURVATURE_ERROR < band[0]:
       return measured
     return min(max(measured, band[0]), band[1])
 

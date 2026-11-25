@@ -20,7 +20,9 @@ from ....can import CANPacker
 from ....car.ford import fordcan
 from ....car.ford.interface import CarInterface
 from ....car.ford.values import CAR, CarControllerParams
-from ...core.carcontroller_ext import BluePilotLateral, InputTracker, panda_pinion_geometry
+from ....car.vehicle_model import VehicleModel, calc_slip_factor
+from ...core.carcontroller_ext import BluePilotLateral, InputTracker, fitted_pinion_curvature, panda_pinion_geometry
+from ...core.lateral_inputs import VehicleParamsView
 from ...core.values_ext import (
   FordSafetyFlagsSP, FORD_PINION_FITTED_GEOMETRY, FORD_PINION_GEOMETRY_INDEX, FORD_PINION_GEOMETRY_SHIFT,
   PINION_SHADOW_BAND, PINION_SHADOW_BAND_MARGIN,
@@ -44,6 +46,18 @@ def car_state(speed: float, angle_deg: float, pressed: bool = False):
 def tracker(platform: str, pinion: bool = True) -> InputTracker:
   CP = CarInterface.get_non_essential_params(platform)
   return InputTracker(CP, pinion_param_sp(platform) if pinion else int(FordSafetyFlagsSP.BP_LATERAL))
+
+
+def measure_at(t: InputTracker, units: float, speed: float = 13.0, angle_deg: float = 60.0) -> float:
+  """Give a fitted-row tracker the learned angle offset that puts its measurement at `units` (2e-5 1/m, OP sign) for
+  this wheel angle and speed, and return that measurement in 1/m. The offset and roll are all that separate the two
+  measurements on a fitted platform, and no real offset is this large: these tests need the distance between the
+  measurements, not its cause. The panda's own measurement at 60 deg and 13 m/s is -714 units."""
+  slip, steer_ratio, wheelbase = t.fitted_geometry
+  k = steer_ratio * wheelbase * (1.0 - slip * speed * speed)
+  t.lp = VehicleParamsView(SimpleNamespace(steerRatio=17.0, stiffnessFactor=1.0, roll=0.0,
+                                           angleOffsetDeg=angle_deg + math.degrees(units / CURVATURE_TO_CAN * k)))
+  return t.get_current_curvature(car_state(speed, angle_deg))
 
 
 class TestPandaBandGeometry(unittest.TestCase):
@@ -82,6 +96,74 @@ class TestPandaBandGeometry(unittest.TestCase):
 
 E = CarControllerParams.CURVATURE_ERROR
 HALF = PINION_SHADOW_BAND - PINION_SHADOW_BAND_MARGIN
+
+
+class TestFittedPinionMeasurement(unittest.TestCase):
+  """On a platform with a fitted row the Python side measures with that row, plus its own angle offset and roll. The
+  learned steer ratio and stiffness are left out: on the Expedition the ratio moved from 18.7 to 20.3 with the kind of
+  driving, and at 20.3 the old measurement read 11 to 14% under the truck in a low-speed turn."""
+  POINTS = ((10.0, 84.0), (13.0, 60.0), (13.0, -60.0), (20.0, 20.0), (31.0, -5.0), (0.0, 30.0))
+
+  def _learned(self, t, ratio=17.0, stiffness=1.0, offset=0.0, roll=0.0):
+    t.lp = VehicleParamsView(SimpleNamespace(steerRatio=ratio, stiffnessFactor=stiffness, roll=roll, angleOffsetDeg=offset))
+    t.VM.update_params(stiffness, ratio)   # as InputTracker.update does every frame
+
+  def test_same_as_the_panda_with_no_offset_or_roll(self):
+    t = tracker(EXPEDITION)
+    for speed, angle_deg in self.POINTS:
+      cs = car_state(speed, angle_deg)
+      if speed >= 0.1:   # the panda floors its speed at 0.1 m/s
+        self.assertAlmostEqual(t.get_current_curvature(cs), t.get_panda_curvature(cs), places=15)
+    self.assertAlmostEqual(t.get_current_curvature(car_state(0.0, 30.0)) * CURVATURE_TO_CAN, -398.3, delta=0.1)   # 30 deg / 65.7 m
+
+  def test_does_not_follow_the_learned_ratio_or_stiffness(self):
+    t = tracker(EXPEDITION)
+    for speed, angle_deg in self.POINTS:
+      cs = car_state(speed, angle_deg)
+      want = t.get_current_curvature(cs)
+      for ratio, stiffness in ((17.0, 1.0), (18.7, 1.0), (20.3, 0.93), (30.0, 1.17), (8.5, 0.5)):
+        self._learned(t, ratio, stiffness)
+        self.assertEqual(t.get_current_curvature(cs), want)
+      self._learned(t)
+
+  def test_offset_and_roll_by_hand(self):
+    # curvature = -(radians(angle - offset) / (21.12 * 3.112 * (1 + 0.000684 v^2)) + 9.81 * roll / (1 / -0.000684 - v^2))
+    t = tracker(EXPEDITION)
+    for speed, angle_deg, offset, roll, units in ((13.0, 60.0, 0.0, 0.0, -714.10), (13.0, 60.0, -1.2, 0.0, -728.38),
+                                                  (13.0, 60.0, 0.0, 0.05, -714.10 + 15.04), (25.0, 20.0, 0.0, -0.03, -186.02 - 7.05)):
+      with self.subTest(speed=speed, angle_deg=angle_deg, offset=offset, roll=roll):
+        self._learned(t, offset=offset, roll=roll)
+        self.assertAlmostEqual(t.get_current_curvature(car_state(speed, angle_deg)) * CURVATURE_TO_CAN, units, delta=0.02)
+
+  def test_is_the_vehicle_models_arithmetic(self):
+    """fitted_pinion_curvature is VehicleModel.calc_curvature with the three numbers given instead of derived: fed a
+    vehicle model's own slip factor, steer ratio and wheelbase it returns what that model does."""
+    VM = VehicleModel(CarInterface.get_non_essential_params("FORD_EXPLORER_MK6"))
+    geometry = (calc_slip_factor(VM), VM.sR, VM.l)
+    for speed, angle_deg in self.POINTS:
+      for roll in (-0.08, 0.0, 0.05):
+        self.assertAlmostEqual(fitted_pinion_curvature(geometry, math.radians(angle_deg), speed, roll),
+                               VM.calc_curvature(math.radians(angle_deg), speed, roll), places=15)
+    self.assertEqual(fitted_pinion_curvature((0.0, 17.0, 3.0), 0.0, 20.0, 0.05), 0.0)   # no slip factor: no roll term, as roll_compensation
+
+  def test_a_platform_without_a_fitted_row_keeps_the_learned_model(self):
+    name = "FORD_F_150_LIGHTNING_MK1"
+    self.assertFalse(name in FORD_PINION_FITTED_GEOMETRY)
+    t = tracker(name)
+    self.assertIsNone(t.fitted_geometry)
+    cs = car_state(13.0, 60.0)
+    seen = set()
+    for ratio in (15.0, 16.9, 19.0):
+      self._learned(t, ratio, offset=0.4, roll=0.01)
+      self.assertEqual(t.get_current_curvature(cs), -t.VM.calc_curvature(math.radians(60.0 - 0.4), 13.0, 0.01))
+      seen.add(t.get_current_curvature(cs))
+    self.assertEqual(len(seen), 3)
+
+  def test_yaw_source_does_not_read_the_row(self):
+    t = tracker(EXPEDITION, pinion=False)
+    cs = SimpleNamespace(out=SimpleNamespace(vEgoRaw=13.0, steeringAngleDeg=60.0, yawRate=0.13, steeringPressed=False))
+    self._learned(t, 20.3, offset=-2.0, roll=0.05)
+    self.assertEqual(t.get_current_curvature(cs), -0.13 / 13.0)
 
 
 class TestPandaBandClip(unittest.TestCase):
@@ -145,14 +227,13 @@ class TestPandaBandClip(unittest.TestCase):
           self.assertFalse(t.bp_panda_band_disjoint)
 
   def test_disjoint_example_from_review(self):
-    """Learned steer ratio 30 at 60 deg and 13 m/s: the Python measurement (-439 units) is 275 from the panda's (-714),
-    further than the two half-widths together (230). An unwind to zero stays where the deviation clip put it, 100
-    units from the Python measurement; it is not pulled back toward the panda's."""
+    """The Python measurement at -439 units, 275 from the panda's -714 and further than the two half-widths together
+    (230). An unwind to zero stays where the deviation clip put it, 100 units from the Python measurement; it is not
+    pulled back toward the panda's."""
     t = tracker(EXPEDITION)
-    t.VM.update_params(1.0, 30.0)
     cs = car_state(13.0, 60.0)
-    measured = t.get_current_curvature(cs)
-    self.assertAlmostEqual(measured * CURVATURE_TO_CAN, -439.25, delta=0.5)
+    measured = measure_at(t, -439.25)
+    self.assertAlmostEqual(measured * CURVATURE_TO_CAN, -439.25, delta=0.01)
     unwind = measured + E
     self.assertEqual(t.clip_command_to_panda_band(unwind, measured - E, measured + E, cs), unwind)
     self.assertTrue(t.bp_panda_band_disjoint)
@@ -162,42 +243,44 @@ class TestPandaBandClip(unittest.TestCase):
     t = tracker(EXPEDITION)
     cs = car_state(13.0, 60.0)
     low, high = t.panda_band(cs)             # -844 to -584 units around the panda's -714
-    measured = t.get_current_curvature(cs)   # default model: -775, inside the band
+    self.assertEqual(t.get_shadow_of_measurement(cs), t.get_panda_curvature(cs))   # no offset or roll: the same value
+    measured = measure_at(t, -775.0)         # 61 from the panda's: inside the band
     self.assertEqual(t.get_shadow_of_measurement(cs), measured)
-    t.VM.update_params(1.0, 24.0)            # -549: 165 from the panda's, the windows still overlap: the band's edge
-    self.assertAlmostEqual(t.get_current_curvature(cs) * CURVATURE_TO_CAN, -549, delta=1)
+    measure_at(t, -549.0)                    # 165 away, the windows still overlap: the band's edge
     self.assertEqual(t.get_shadow_of_measurement(cs), high)
-    t.VM.update_params(1.0, 30.0)            # -439: 275 away, no overlap: published as it is, for the panda to judge
-    self.assertEqual(t.get_shadow_of_measurement(cs), t.get_current_curvature(cs))
-    self.assertGreater(t.get_current_curvature(cs), high)
+    measured = measure_at(t, -439.25)        # 275 away, no overlap: published as it is, for the panda to judge
+    self.assertEqual(t.get_shadow_of_measurement(cs), measured)
+    self.assertGreater(measured, high)
 
   def test_shadow_of_measurement_leaves_the_commands_flags(self):
     t = tracker(EXPEDITION)
     cs = car_state(13.0, 60.0)
-    measured = t.get_current_curvature(cs)
-    for ratio, flags in ((17.0, (True, False)), (30.0, (False, True))):   # the guard moved the lead; the windows are disjoint
-      t.VM.update_params(1.0, ratio)
-      m = t.get_current_curvature(cs)
+    for units, flags in ((-775.0, (True, False)), (-439.25, (False, True))):   # the guard moved the lead; the windows are disjoint
+      m = measure_at(t, units)
       t.clip_command_to_panda_band(m - E, m - E, m + E, cs)
       self.assertEqual((t.bp_panda_band_limited, t.bp_panda_band_disjoint), flags)
       t.get_shadow_of_measurement(cs)
       self.assertEqual((t.bp_panda_band_limited, t.bp_panda_band_disjoint), flags)
-    self.assertLess(measured, 0)
 
 
-def strategy(pinion: bool = True):
+MEASURED = -775.0   # units: where the strategy tests put the Python measurement, 61 from the panda's -714
+
+
+def strategy(pinion: bool = True, measured_units: float = MEASURED):
+  """The Expedition's angle strategy with its pinion measurement at measured_units for 60 deg of wheel at 13 m/s."""
   CP = CarInterface.get_non_essential_params(EXPEDITION)
   bp = BluePilotLateral(CP, pinion_param_sp(EXPEDITION) if pinion else int(FordSafetyFlagsSP.BP_LATERAL),
                              CANPacker("ford_lincoln_base_pt"), fordcan.CanBus(CP))
   bp.angle.update_angle_params(None)
   bp.angle.low_speed_plan_blend = 0.0  # no model plan in these tests: the command is the request
+  measure_at(bp.angle.inputs, measured_units)
   return bp.angle
 
 
 def ticks(angle, request: float, speed: float, angle_deg: float, pressed: bool = False, frames: int = 40):
-  """(kappa_cmd published, path_angle) per frame for a held request, speed and wheel angle. Yaw rate is given as the
-  default model's curvature for that wheel angle, so the yaw and pinion sources measure the same thing here."""
-  yaw = -tracker(EXPEDITION).get_current_curvature(car_state(speed, angle_deg)) * speed
+  """(kappa_cmd published, path_angle) per frame for a held request, speed and wheel angle. The yaw rate given is
+  MEASURED's, so the yaw source measures here what the pinion source does in strategy()'s default."""
+  yaw = -MEASURED / CURVATURE_TO_CAN * speed
   CS = SimpleNamespace(out=SimpleNamespace(vEgoRaw=speed, steeringPressed=pressed, steeringAngleDeg=angle_deg, yawRate=yaw))
   out = []
   for _ in range(frames):
@@ -213,8 +296,9 @@ class TestPandaBandInTheStrategy(unittest.TestCase):
   def setUp(self):
     cs = car_state(self.SPEED, self.ANGLE)
     t = tracker(EXPEDITION)
-    self.measured = t.get_current_curvature(cs)   # the default model, as before the first learned values: -775 units
+    self.measured = measure_at(t, MEASURED)       # -775 units
     self.panda = t.get_panda_curvature(cs)        # -714 units
+    self.assertAlmostEqual(self.measured * CURVATURE_TO_CAN, MEASURED, delta=1e-6)
     self.assertAlmostEqual((self.panda - self.measured) * CURVATURE_TO_CAN, 61, delta=1)
 
   def test_lead_is_held_inside_the_panda_band(self):
@@ -242,9 +326,7 @@ class TestPandaBandInTheStrategy(unittest.TestCase):
     self.assertFalse(a.inputs.bp_panda_band_limited)
 
   def test_disjoint_measurements_leave_the_deviation_clip_alone(self):
-    a = strategy()
-    a.inputs.lp = SimpleNamespace(steerRatio=30.0, stiffnessFactor=1.0, roll=0.0, angleOffsetDeg=0.0)
-    a.inputs.VM.update_params(1.0, 30.0)
+    a = strategy(measured_units=-439.25)   # 275 from the panda's
     measured = a.inputs.get_current_curvature(car_state(self.SPEED, self.ANGLE))
     for request, edge in ((0.0, measured + E), (measured * 5, measured - E)):
       for kappa, pa in ticks(a, request, self.SPEED, self.ANGLE, frames=10):
@@ -252,16 +334,14 @@ class TestPandaBandInTheStrategy(unittest.TestCase):
         self.assertAlmostEqual(kappa, edge, places=12)
       self.assertTrue(a.inputs.bp_panda_band_disjoint)
 
-  def _with_ratio(self, ratio):
-    a = strategy()
-    a.inputs.lp = SimpleNamespace(steerRatio=ratio, stiffnessFactor=1.0, roll=0.0, angleOffsetDeg=0.0)
-    a.inputs.VM.update_params(1.0, ratio)
+  def _with_measured(self, units):
+    a = strategy(measured_units=units)
     return a, a.inputs.get_current_curvature(car_state(self.SPEED, self.ANGLE))
 
   def test_pressed_publishes_the_measurement_inside_the_band(self):
     """Pressed, with the two measurements 165 units apart (the windows overlap): the published value is the
     measurement moved to the band's edge."""
-    a, measured = self._with_ratio(24.0)
+    a, measured = self._with_measured(-549.0)
     self.assertAlmostEqual((measured - self.panda) * CURVATURE_TO_CAN, 165, delta=2)
     kappa, _ = ticks(a, 0.0, self.SPEED, self.ANGLE, pressed=True, frames=3)[-1]
     self.assertAlmostEqual(kappa, self.panda + HALF, places=12)
@@ -269,7 +349,7 @@ class TestPandaBandInTheStrategy(unittest.TestCase):
   def test_pressed_does_not_hide_a_large_disagreement(self):
     """Pressed, 275 units apart (no overlap): the measurement is published as it is, outside the panda's band, so a
     requesting frame cannot pass the panda's check on a value moved to meet it."""
-    a, measured = self._with_ratio(30.0)
+    a, measured = self._with_measured(-439.25)
     kappa, _ = ticks(a, 0.0, self.SPEED, self.ANGLE, pressed=True, frames=3)[-1]
     self.assertEqual(kappa, measured)
     self.assertGreater(abs(kappa - self.panda), PINION_SHADOW_BAND)
@@ -314,7 +394,7 @@ class TestPandaBandInTheStrategy(unittest.TestCase):
     for kappa, _ in out[:20] + out[30:]:
       self.assertAlmostEqual(kappa, self.panda - HALF, places=12)
     for kappa, _ in out[20:30]:
-      self.assertAlmostEqual(kappa, self.measured, places=12)   # the default model's measurement is inside the band
+      self.assertAlmostEqual(kappa, self.measured, places=12)   # 61 units from the panda's: inside the band, published as it is
     steps = [abs(out[i + 1][1] - out[i][1]) for i in range(len(out) - 1)]
     self.assertLessEqual(max(steps), 0.055 + 1e-12)
     self.assertEqual(out[19][1], out[39][1])   # back at the same settled path angle
@@ -328,8 +408,9 @@ class TestPandaBandInTheStrategy(unittest.TestCase):
 
 
 class TestPandaBandThroughFirmware(BPFordTestCase):
-  """The case both reviews of the fitted row raised, through libsafety: the Python side still on its default model
-  (no learned values yet) at 60 deg of wheel and 13 m/s, commanding its full same-direction lead."""
+  """Through libsafety: the two measurements 61 units apart at 60 deg of wheel and 13 m/s, and the command at the
+  edge of the deviation window, turning further the same way. (61 units is where the learned-ratio model stood before
+  the Python side measured with the fitted row; offset and roll have reached 71 on the logged drives.)"""
   CANFD = True
   PARAM_SP = pinion_param_sp(EXPEDITION)
   cnt = 0
@@ -347,16 +428,15 @@ class TestPandaBandThroughFirmware(BPFordTestCase):
     self.tx(self.lka_bp_status_msg(True, -kappa_op))  # the shadow rides in Ford sign
     return self.tx(self.lat(True, 0, SMALL_ANGLE, 0, 0))
 
-  def test_default_model_lead(self):
+  def test_lead_past_the_band(self):
     speed, angle_deg = 13.0, 60.0
     self.assertGreater(speed, CURVATURE_ERROR_MIN_SPEED)
-    t = tracker(EXPEDITION)  # no update(): the vehicle model is CarSpecs, as before the first learned values arrive
+    t = tracker(EXPEDITION)
     cs = car_state(speed, angle_deg)
     self._measure(speed, angle_deg)
     self.assertAlmostEqual(self.meas()[1], 714, delta=1)
 
-    measured = t.get_current_curvature(cs)
-    self.assertAlmostEqual(-measured * CURVATURE_TO_CAN, 775, delta=1)  # the Python default model, 61 units from the panda's 714
+    measured = measure_at(t, -775.0)  # 61 units from the panda's 714
     lead = measured - CarControllerParams.CURVATURE_ERROR  # the deviation clip's edge, turning further the same way
     self.assertFalse(self._accepted(lead), "the unclipped lead is outside the panda's band: this is the failure")
 

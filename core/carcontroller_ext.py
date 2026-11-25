@@ -26,6 +26,7 @@ except ImportError:
 
   def scale_tire_stiffness_per_mass(wheelbase, center_to_front, tire_stiffness_factor):
     return scale_tire_stiffness(1.0, wheelbase, center_to_front, tire_stiffness_factor)
+from ...car import ACCELERATION_DUE_TO_GRAVITY
 from ...car.ford.values import CarControllerParams, FordFlags
 from ...car.vehicle_model import VehicleModel, calc_slip_factor
 from ..can import fordcan_ext
@@ -72,6 +73,16 @@ def panda_pinion_geometry(CP):
   return calc_slip_factor(VM), CP.steerRatio, VM.l
 
 
+def fitted_pinion_curvature(geometry, steering_angle_rad: float, v: float, roll: float) -> float:
+  """VehicleModel.calc_curvature with a fitted row's fixed slip factor, steer ratio and wheelbase in place of the
+  learned vehicle model: curvature from the steering angle (already less its offset), plus roll compensation. Same
+  sign as calc_curvature."""
+  slip_factor, steer_ratio, wheelbase = geometry
+  v2 = v * v
+  roll_compensation = 0.0 if abs(slip_factor) < 1e-6 else ACCELERATION_DUE_TO_GRAVITY * roll / ((1.0 / slip_factor) - v2)
+  return steering_angle_rad / (steer_ratio * wheelbase * (1.0 - slip_factor * v2)) + roll_compensation
+
+
 class InputTracker:
   """The model / vehicle-parameter inputs both strategies read, and the car's measured curvature.
   Owned by BluePilotLateral and updated once per frame from the host's LateralInputs, before either
@@ -90,6 +101,8 @@ class InputTracker:
     # state from the startup safety bits (values_ext.ford_safety_param), never a live settings read:
     # a live flip against stale firmware would fight the panda.
     self.bp_pinion_curvature_enabled = bool(safety_param & FordSafetyFlagsSP.STEER_ANGLE_CURVATURE)
+    # A platform whose pinion geometry is fitted to drive data measures with that row here too (get_current_curvature).
+    self.fitted_geometry = FORD_PINION_FITTED_GEOMETRY.get(CP.carFingerprint)
 
     # The panda's own geometry row, for panda_band: only with the pinion source on. With the yaw source the
     # panda measures exactly as get_current_curvature does, and there is nothing to reconcile.
@@ -117,12 +130,21 @@ class InputTracker:
     (corr +0.99), and the panda safety angle_meas switches to the same source (see
     bluepilot_lateral/safety/ford.h) -- the layers always agree. angleOffsetDeg/roll come from
     liveParameters (paramsd, IMU-derived, not the car yaw sensor).
+
+    A platform with a fitted pinion row (FORD_PINION_FITTED_GEOMETRY) uses that row's geometry here as well, with the
+    same angle offset and roll, instead of the learned steer ratio and stiffness. On the Expedition the learned ratio
+    follows the kind of driving (18.7 in town, 20.3 after two hours of highway), because the vehicle model's speed
+    term does not fit the truck; at 20.3 this measurement read 11 to 14% under the truck's curvature in a low-speed
+    turn, and up to 142 units away from the panda's. With the fitted row it is within 71 units of the panda's on the
+    same drives, the difference being the offset and roll the panda does not apply.
     """
     if self.bp_pinion_curvature_enabled:
       angle_offset_deg = self.lp.angleOffsetDeg if self.lp is not None else 0.0
       roll = self.lp.roll if self.lp is not None else 0.0
-      return -self.VM.calc_curvature(math.radians(CS.out.steeringAngleDeg - angle_offset_deg),
-                                     CS.out.vEgoRaw, roll)
+      steering_angle_rad = math.radians(CS.out.steeringAngleDeg - angle_offset_deg)
+      if self.fitted_geometry is not None:
+        return -fitted_pinion_curvature(self.fitted_geometry, steering_angle_rad, CS.out.vEgoRaw, roll)
+      return -self.VM.calc_curvature(steering_angle_rad, CS.out.vEgoRaw, roll)
     return -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
 
   def get_panda_curvature(self, CS):

@@ -172,8 +172,8 @@ class InputTracker:
     do not overlap no command satisfies both; kappa is then returned as it came, the panda is left to judge the frame as
     it would without this, and bp_panda_band_disjoint is set. With the yaw source kappa is returned untouched.
 
-    Against the alternative this is never further from the request: a dropped frame leaves the PSCM on the previous
-    frame's command for another 50 ms."""
+    Only the angle strategy calls this. Curvature-primary mode clips around the same measurement without it (see
+    PINION_SHADOW_BAND in values_ext.py)."""
     self.bp_panda_band_limited = False
     self.bp_panda_band_disjoint = False
     band = self.panda_band(CS)

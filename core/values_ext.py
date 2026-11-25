@@ -115,16 +115,20 @@ FORD_PINION_FITTED_GEOMETRY = {
 }
 
 # With the pinion source on, the panda accepts a shadow curvature within this much of its own measurement
-# (FORD_LIMITS(_, 150) in bluepilot_lateral/safety/ford.h; 150 units of 2e-5 1/m), and the Python side keeps what it
-# sends this far inside that band (carcontroller_ext.InputTracker.panda_band). The panda measures from the raw
-# pinion angle through its fixed geometry row; the Python side measures with the learned steer ratio, stiffness, angle
-# offset and roll. The two normally agree to well under the 50 units between the Python clip (100) and the band, but
-# not always: with the learned values at their defaults the gap is 61 units at 60 deg of wheel and 13 m/s on the
-# Expedition, and a command at the edge of the Python clip then leaves the band and the panda drops the frame. The
-# panda checks against the minimum and maximum of its last six samples, which already covers a wheel that is moving.
-# The margin is for the rest: rounding on both sides, the 0.1 deg pinion resolution (about 1 unit), speed sampled a
-# few ms apart, and this frame's sample falling just outside those six. It does not cover a fast reversal; that
-# frame is dropped, as it would be without this.
+# (FORD_LIMITS(_, 150) in bluepilot_lateral/safety/ford.h; 150 units of 2e-5 1/m), and the angle strategy keeps what it
+# sends this far inside that band (carcontroller_ext.InputTracker.panda_band). The panda measures from the raw pinion
+# angle through its fixed geometry row. The Python side adds the learned angle offset and roll, and on a platform
+# without a fitted row it also uses the learned steer ratio and stiffness. The two normally agree to well under the 50
+# units between the Python clip (100) and the band, but not always: on the Expedition offset and roll have put them
+# 71 units apart on logged drives (and the learned-ratio model it used before the fitted row, 61 at its defaults and
+# 136 after a long highway drive), and a command at the edge of the Python clip then leaves the band and the panda
+# drops the frame. The panda checks against the minimum and maximum of its last six samples, which already covers a
+# wheel that is moving. The margin is for the rest: rounding on both sides, the 0.1 deg pinion resolution (about 1
+# unit), speed sampled a few ms apart, and this frame's sample falling just outside those six. It does not cover a
+# fast reversal; that frame is dropped, as it would be without this.
+# Only the angle strategy does this. Curvature-primary mode clips around the same Python measurement with no such
+# step, so with the pinion source any distance between the two measurements comes off its 50 units: use the pinion
+# source with angle mode.
 PINION_SHADOW_BAND = 0.003
 PINION_SHADOW_BAND_MARGIN = 0.0004
 

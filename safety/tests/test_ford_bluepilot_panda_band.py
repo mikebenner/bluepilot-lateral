@@ -2,15 +2,17 @@
 """
 BluePilot Ford lateral, pinion source: the Python side keeps what it sends inside the panda's own band.
 
-With STEER_ANGLE_CURVATURE the panda measures curvature from the raw pinion angle through its fixed geometry row,
-while the Python side measures with the learned steer ratio, stiffness, angle offset and roll. A command at the edge of
-the Python deviation clip (+-0.002 of the Python measurement) can then sit outside the panda's band (+-0.003 of the
-panda's), and the panda drops the frame. InputTracker computes the panda's measurement by the panda's own arithmetic
-and keeps the command in the part of the deviation window that is also inside the panda's band, less a margin.
+With STEER_ANGLE_CURVATURE the panda measures curvature from the raw pinion angle through its fixed geometry row. The
+Python side adds the learned angle offset and roll, and on a platform without a fitted row it also uses the learned
+steer ratio and stiffness. A command at the edge of the Python deviation clip (+-0.002 of the Python measurement) can
+then sit outside the panda's band (+-0.003 of the panda's), and the panda drops the frame. InputTracker computes the
+panda's measurement by the panda's own arithmetic and keeps the command in the part of the deviation window that is
+also inside the panda's band, less a margin.
 
-These tests pin that arithmetic to the C table for every platform, run the angle strategy tick after tick with the two
-measurements apart, and put the failing case (learned values at their defaults, 60 deg of wheel at 13 m/s on the
-Expedition) through the compiled firmware with and without the clip.
+These tests pin that arithmetic to the C table for every platform, check the fitted platform's own measurement, run
+the angle strategy tick after tick with the two measurements apart, and put a command past the band through the
+compiled firmware with and without the clip. The Expedition measures with its fitted row, so with no offset or roll
+its two measurements are the same; the tests set the distance between them directly (measure_at).
 """
 import math
 import unittest
